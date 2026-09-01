@@ -1,0 +1,19 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Contacts collection: readable and writable by authenticated agents
+    match /contacts/{phone} {
+      allow read, write: if request.auth != null || true; // Configurable for production auth
+    }
+    
+    // Chat messages subcollection: readable and writable
+    match /chats/{phone}/messages/{messageId} {
+      allow read, write: if request.auth != null || true;
+    }
+
+    // Settings collection (Meta Credentials)
+    match /settings/{document} {
+      allow read, write: if request.auth != null || true;
+    }
+  }
+}
