@@ -1,4 +1,10 @@
-const functions = require('firebase-functions');
+let functions;
+try {
+  functions = require('firebase-functions');
+} catch (e) {
+  functions = null;
+}
+
 const admin = require('firebase-admin');
 const express = require('express');
 const cors = require('cors');
@@ -10,6 +16,11 @@ const db = admin.firestore();
 const app = express();
 app.use(cors({ origin: true }));
 app.use(express.json());
+
+// Root health check endpoint for Render / Uptime monitors
+app.get('/', (req, res) => {
+  res.send('WhatsApp CRM Webhook Server is running!');
+});
 
 // ----------------------------------------------------------------------
 // 1. GET /webhook (Meta Webhook Challenge Verification)
@@ -245,4 +256,17 @@ app.post('/api/send-message', async (req, res) => {
   }
 });
 
-exports.api = functions.https.onRequest(app);
+// Start Express server on PORT for Render / standalone Node execution
+const PORT = process.env.PORT || 5000;
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
+
+// Firebase Cloud Function export (if running in Firebase environment)
+if (functions) {
+  exports.api = functions.https.onRequest(app);
+}
+
+module.exports = app;
+
+
