@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Settings, ShieldCheck, Key, Phone, Database, Check, Copy, ExternalLink, X } from 'lucide-react';
 import { getStoredConfig, saveMetaConfig } from '../firebase/storeService';
+import { BACKEND_URL } from '../firebase/config';
 
 export default function MetaSettingsModal({ onClose }) {
   const [config, setConfig] = useState({
@@ -23,7 +24,7 @@ export default function MetaSettingsModal({ onClose }) {
     setTimeout(() => setIsSaved(false), 2000);
   };
 
-  const webhookUrl = `https://us-central1-${import.meta.env.VITE_FIREBASE_PROJECT_ID || 'whatsapp-crm-demo'}.cloudfunctions.net/api/webhook`;
+  const webhookUrl = `${BACKEND_URL}/webhook`;
 
   const copyWebhookUrl = () => {
     navigator.clipboard.writeText(webhookUrl);

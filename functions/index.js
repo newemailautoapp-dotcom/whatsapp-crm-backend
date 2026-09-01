@@ -25,29 +25,20 @@ app.get('/', (req, res) => {
 // ----------------------------------------------------------------------
 // 1. GET /webhook (Meta Webhook Challenge Verification)
 // ----------------------------------------------------------------------
-app.get('/webhook', async (req, res) => {
+app.get('/webhook', (req, res) => {
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
   const challenge = req.query['hub.challenge'];
 
-  // Retrieve verify token from Firestore settings or process.env
-  let expectedToken = process.env.META_VERIFY_TOKEN || 'my_secret_wa_webhook_token_2026';
-  try {
-    const configSnap = await db.doc('settings/metaConfig').get();
-    if (configSnap.exists && configSnap.data().verifyToken) {
-      expectedToken = configSnap.data().verifyToken;
-    }
-  } catch (e) {
-    console.warn('Could not read verifyToken from Firestore, using default fallback.');
-  }
+  const expectedToken = process.env.WEBHOOK_VERIFY_TOKEN || process.env.VERIFY_TOKEN || 'my_secure_token_123';
 
   if (mode === 'subscribe' && token === expectedToken) {
-    console.log('WEBHOOK_VERIFIED successfully');
+    console.log('WEBHOOK_VERIFIED successfully!');
     return res.status(200).send(challenge);
-  } else {
-    console.error('Webhook verification failed. Token mismatch.');
-    return res.sendStatus(403);
   }
+  
+  console.log('Webhook verification failed. Expected:', expectedToken, 'Received:', token);
+  return res.sendStatus(403);
 });
 
 // ----------------------------------------------------------------------

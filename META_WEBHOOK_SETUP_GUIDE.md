@@ -40,7 +40,7 @@ Follow this guide to connect your live WhatsApp Business Account (WABA) with thi
 4. Set **Callback URL**:
    `https://us-central1-YOUR_PROJECT_ID.cloudfunctions.net/api/webhook`
 5. Set **Verify Token**:
-   `my_secret_wa_webhook_token_2026` (or the token specified in your `Meta Settings Modal`).
+   `my_secure_token_123` (or set environment variable `WEBHOOK_VERIFY_TOKEN` in Render).
 6. Click **Verify and Save**.
 7. Under **Webhook Fields**, click **Manage** and subscribe to:
    - `messages` (To receive customer inbound messages and button clicks)

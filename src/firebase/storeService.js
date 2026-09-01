@@ -1,4 +1,4 @@
-import { db } from './config';
+import { db, BACKEND_URL } from './config';
 import { 
   collection, 
   doc, 
@@ -19,8 +19,7 @@ const STORAGE_KEY_MESSAGES = 'wa_crm_messages_v1';
 const STORAGE_KEY_CONFIG = 'wa_crm_meta_config_v1';
 
 // Check if live Firebase project is configured
-const isLiveFirebase = !!import.meta.env.VITE_FIREBASE_PROJECT_ID && 
-                       import.meta.env.VITE_FIREBASE_PROJECT_ID !== 'whatsapp-crm-demo';
+const isLiveFirebase = true; // Connected to live Firebase project whatsapp-crm-app-904e8
 
 // Global Event Target for internal state updates when in demo mode
 const eventHub = new EventTarget();
@@ -58,7 +57,7 @@ const DEFAULT_META_CONFIG = {
   phoneNumberId: import.meta.env.VITE_META_PHONE_NUMBER_ID || '109823471092834',
   wabaId: import.meta.env.VITE_META_WABA_ID || '992837410293847',
   accessToken: import.meta.env.VITE_META_ACCESS_TOKEN || 'EAAG...demo_access_token',
-  verifyToken: import.meta.env.VITE_META_VERIFY_TOKEN || 'my_secret_wa_webhook_token_2026'
+  verifyToken: import.meta.env.VITE_META_VERIFY_TOKEN || 'my_secure_token_123'
 };
 
 export function getStoredConfig() {
@@ -144,6 +143,26 @@ export async function sendOutboundMessage({ phone, body, type = 'text', template
     timestamp,
     direction: 'outbound'
   };
+
+  // Dispatch outbound message to Render Backend API (https://whatsapp-crm-backend-enzj.onrender.com/api/send-message)
+  try {
+    fetch(`${BACKEND_URL}/api/send-message`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        phone,
+        body,
+        type,
+        templateName
+      })
+    }).then(res => res.json()).then(data => {
+      console.log('Render backend message dispatched:', data);
+    }).catch(err => {
+      console.warn('Render backend call warning:', err);
+    });
+  } catch (e) {
+    console.warn('Backend fetch error:', e);
+  }
 
   if (isLiveFirebase) {
     try {
