@@ -49,104 +49,132 @@ app.post('/webhook', async (req, res) => {
 
   if (body.object === 'whatsapp_business_account') {
     try {
-      const entry = body.entry?.[0];
-      const changes = entry?.changes?.[0];
-      const value = changes?.value;
+      const entries = body.entry || [];
+      for (const entry of entries) {
+        const changes = entry.changes || [];
+        for (const change of changes) {
+          const value = change.value;
+          if (!value) continue;
 
-      if (!value) return res.status(200).send('EVENT_RECEIVED');
+          // A) Process Inbound Messages
+          if (value.messages && value.messages.length > 0) {
+            for (const message of value.messages) {
+              const contactInfo = value.contacts?.find(c => c.wa_id === message.from) || value.contacts?.[0];
+              const phone = message.from; // Sender WhatsApp phone
+              const profileName = contactInfo?.profile?.name || `Customer ${phone.slice(-4)}`;
+              const timestamp = parseInt(message.timestamp, 10) * 1000 || Date.now();
+              const messageId = message.id;
+              const msgType = message.type;
 
-      // A) Process Inbound Messages
-      if (value.messages && value.messages.length > 0) {
-        const message = value.messages[0];
-        const contactInfo = value.contacts?.[0];
+              let msgBody = '';
+              let buttonPayload = null;
 
-        const phone = message.from; // Sender WhatsApp phone
-        const profileName = contactInfo?.profile?.name || `Customer ${phone.slice(-4)}`;
-        const timestamp = parseInt(message.timestamp, 10) * 1000 || Date.now();
-        const messageId = message.id;
-        const msgType = message.type;
+              if (msgType === 'text') {
+                msgBody = message.text?.body || '';
+              } else if (msgType === 'interactive' && message.interactive?.type === 'button_reply') {
+                msgBody = message.interactive.button_reply.title;
+                buttonPayload = message.interactive.button_reply.id;
+              } else if (msgType === 'button') {
+                msgBody = message.button?.text || '';
+                buttonPayload = message.button?.payload || null;
+              } else if (msgType === 'image') {
+                msgBody = `[Image Received] ${message.image?.caption || ''}`;
+              } else {
+                msgBody = `[${msgType.toUpperCase()} Message Received]`;
+              }
 
-        let msgBody = '';
-        let buttonPayload = null;
+              // 1. Auto-upsert Contact document into Firestore contacts/{phone}
+              const contactRef = db.collection('contacts').doc(phone);
+              const contactSnap = await contactRef.get();
+              const windowExpiry = timestamp + (24 * 60 * 60 * 1000); // 24 Hours from now
 
-        if (msgType === 'text') {
-          msgBody = message.text?.body || '';
-        } else if (msgType === 'interactive' && message.interactive?.type === 'button_reply') {
-          msgBody = message.interactive.button_reply.title;
-          buttonPayload = message.interactive.button_reply.id;
-        } else if (msgType === 'button') {
-          msgBody = message.button?.text || '';
-          buttonPayload = message.button?.payload || null;
-        } else if (msgType === 'image') {
-          msgBody = `[Image Received] ${message.image?.caption || ''}`;
-        } else {
-          msgBody = `[${msgType.toUpperCase()} Message Received]`;
-        }
+              if (!contactSnap.exists) {
+                await contactRef.set({
+                  name: profileName,
+                  phone: phone,
+                  lastMessage: msgBody,
+                  lastMessageTimestamp: admin.firestore.Timestamp.fromMillis(timestamp),
+                  unreadCount: 1,
+                  is24hActive: true,
+                  windowExpiry: windowExpiry,
+                  tags: ['New Lead', 'Inbound'],
+                  optedOut: false,
+                  notes: 'Auto-registered via inbound WhatsApp webhook.'
+                });
+              } else {
+                const currentUnread = contactSnap.data().unreadCount || 0;
+                await contactRef.update({
+                  name: profileName,
+                  lastMessage: msgBody,
+                  lastMessageTimestamp: admin.firestore.Timestamp.fromMillis(timestamp),
+                  unreadCount: currentUnread + 1,
+                  is24hActive: true,
+                  windowExpiry: windowExpiry
+                });
+              }
 
-        // Auto-upsert Contact document into Firestore contacts/{phone}
-        const contactRef = db.collection('contacts').doc(phone);
-        const contactSnap = await contactRef.get();
+              // 2. Save Message document into Firestore chats/{phone}/messages/{messageId}
+              const messageRef = db.collection('chats').doc(phone).collection('messages').doc(messageId);
+              await messageRef.set({
+                id: messageId,
+                from: phone,
+                to: 'business',
+                type: msgType === 'interactive' || msgType === 'button' ? 'button_reply' : msgType,
+                body: msgBody,
+                buttonPayload: buttonPayload,
+                status: 'read',
+                timestamp: admin.firestore.Timestamp.fromMillis(timestamp),
+                direction: 'inbound'
+              });
 
-        const windowExpiry = timestamp + (24 * 60 * 60 * 1000); // 24 Hours from now
+              console.log(`Inbound message saved for ${phone} (${profileName}): ${msgBody}`);
+            }
+          }
 
-        if (!contactSnap.exists) {
-          await contactRef.set({
-            name: profileName,
-            phone: phone,
-            lastMessage: msgBody,
-            lastMessageTimestamp: admin.firestore.Timestamp.fromMillis(timestamp),
-            unreadCount: 1,
-            is24hActive: true,
-            windowExpiry: windowExpiry,
-            tags: ['New Lead', 'Inbound'],
-            optedOut: false,
-            notes: 'Auto-registered via inbound WhatsApp webhook.'
-          });
-        } else {
-          const currentUnread = contactSnap.data().unreadCount || 0;
-          await contactRef.update({
-            name: profileName,
-            lastMessage: msgBody,
-            lastMessageTimestamp: admin.firestore.Timestamp.fromMillis(timestamp),
-            unreadCount: currentUnread + 1,
-            is24hActive: true,
-            windowExpiry: windowExpiry
-          });
-        }
+          // B) Process Delivery Status Updates (sent, delivered, read, failed)
+          if (value.statuses && value.statuses.length > 0) {
+            for (const statusUpdate of value.statuses) {
+              const statusMessageId = statusUpdate.id;
+              const recipientPhone = statusUpdate.recipient_id;
+              const newStatus = statusUpdate.status; // 'sent' | 'delivered' | 'read' | 'failed'
 
-        // Save Message document into Firestore chats/{phone}/messages/{messageId}
-        const messageRef = db.collection('chats').doc(phone).collection('messages').doc(messageId);
-        await messageRef.set({
-          id: messageId,
-          from: phone,
-          to: 'business',
-          type: msgType === 'interactive' || msgType === 'button' ? 'button_reply' : msgType,
-          body: msgBody,
-          buttonPayload: buttonPayload,
-          status: 'read',
-          timestamp: admin.firestore.Timestamp.fromMillis(timestamp),
-          direction: 'inbound'
-        });
+              let updated = false;
 
-        console.log(`Inbound message saved from ${phone} (${profileName}): ${msgBody}`);
-      }
+              // Direct path update if recipient_id is available
+              if (recipientPhone && statusMessageId) {
+                try {
+                  const msgRef = db.collection('chats').doc(recipientPhone).collection('messages').doc(statusMessageId);
+                  await msgRef.update({
+                    status: newStatus,
+                    statusTimestamp: admin.firestore.Timestamp.now()
+                  });
+                  updated = true;
+                } catch (e) {
+                  // Direct doc update failed, fallback to collection group query
+                }
+              }
 
-      // B) Process Delivery Status Updates (sent, delivered, read, failed)
-      if (value.statuses && value.statuses.length > 0) {
-        const statusUpdate = value.statuses[0];
-        const statusMessageId = statusUpdate.id;
-        const recipientPhone = statusUpdate.recipient_id;
-        const newStatus = statusUpdate.status; // 'sent' | 'delivered' | 'read' | 'failed'
-
-        if (recipientPhone && statusMessageId) {
-          const msgRef = db.collection('chats').doc(recipientPhone).collection('messages').doc(statusMessageId);
-          await msgRef.update({
-            status: newStatus,
-            statusTimestamp: admin.firestore.Timestamp.now()
-          }).catch(err => {
-            console.warn(`Could not update message status for ${statusMessageId}:`, err);
-          });
-          console.log(`Status updated for message ${statusMessageId}: ${newStatus}`);
+              // Collection group query fallback if direct update didn't run or failed
+              if (!updated && statusMessageId) {
+                try {
+                  const querySnap = await db.collectionGroup('messages').where('id', '==', statusMessageId).get();
+                  const batch = db.batch();
+                  querySnap.forEach(docSnap => {
+                    batch.update(docSnap.ref, {
+                      status: newStatus,
+                      statusTimestamp: admin.firestore.Timestamp.now()
+                    });
+                  });
+                  await batch.commit();
+                  console.log(`Status updated via Collection Group for ${statusMessageId}: ${newStatus}`);
+                } catch (err) {
+                  console.warn(`Could not update status for message ${statusMessageId}:`, err.message);
+                }
+              } else if (updated) {
+                console.log(`Status updated for message ${statusMessageId}: ${newStatus}`);
+              }
+            }
+          }
         }
       }
 
