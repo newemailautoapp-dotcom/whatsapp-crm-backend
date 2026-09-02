@@ -59,10 +59,10 @@ app.post('/webhook', async (req, res) => {
           // A) Process Inbound Messages
           if (value.messages && value.messages.length > 0) {
             for (const message of value.messages) {
-              const contactInfo = value.contacts?.find(c => c.wa_id === message.from) || value.contacts?.[0];
-              const phone = message.from; // Sender WhatsApp phone
-              const profileName = contactInfo?.profile?.name || `Customer ${phone.slice(-4)}`;
-              const timestamp = parseInt(message.timestamp, 10) * 1000 || Date.now();
+              // Sanitize timestamp: Meta test payloads send ancient sample timestamps like 1504902988 (2017).
+              // If timestamp is invalid or older than 2024, default to current server time Date.now()
+              let parsedTime = parseInt(message.timestamp, 10) * 1000;
+              const timestamp = (!isNaN(parsedTime) && parsedTime > 1704067200000) ? parsedTime : Date.now();
               const messageId = message.id;
               const msgType = message.type;
 

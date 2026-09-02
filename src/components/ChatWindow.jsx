@@ -97,6 +97,28 @@ export default function ChatWindow({
     setShowTemplateModal(false);
   };
 
+  // Safe message time formatter preventing Date parsing crashes
+  const formatMsgTime = (ts) => {
+    if (!ts) return format(new Date(), 'HH:mm');
+    try {
+      let date;
+      if (typeof ts?.toDate === 'function') {
+        date = ts.toDate();
+      } else if (typeof ts === 'number') {
+        date = new Date(ts);
+      } else if (typeof ts === 'object' && typeof ts.seconds === 'number') {
+        date = new Date(ts.seconds * 1000);
+      } else {
+        date = new Date(ts);
+      }
+
+      if (isNaN(date.getTime())) return format(new Date(), 'HH:mm');
+      return format(date, 'HH:mm');
+    } catch (e) {
+      return format(new Date(), 'HH:mm');
+    }
+  };
+
   // 24h Window Expiry check
   const now = Date.now();
   const is24hActive = contact.is24hActive && contact.windowExpiry && contact.windowExpiry > now;
@@ -222,7 +244,7 @@ export default function ChatWindow({
 
                   {/* Footer Timestamp & Delivery Status Ticks */}
                   <div className="flex items-center justify-end gap-1 text-[10px] text-[#8696a0] mt-1 float-right ml-4">
-                    <span>{format(new Date(msg.timestamp || Date.now()), 'HH:mm')}</span>
+                    <span>{formatMsgTime(msg.timestamp)}</span>
 
                     {isOutbound && (
                       <span className="ml-1">

@@ -27,14 +27,30 @@ export default function Sidebar({
 }) {
   const formatTime = (ts) => {
     if (!ts) return '';
-    const date = new Date(ts);
-    if (isToday(date)) {
-      return format(date, 'HH:mm');
+    try {
+      let date;
+      if (typeof ts?.toDate === 'function') {
+        date = ts.toDate();
+      } else if (typeof ts === 'number') {
+        date = new Date(ts);
+      } else if (typeof ts === 'object' && typeof ts.seconds === 'number') {
+        date = new Date(ts.seconds * 1000);
+      } else {
+        date = new Date(ts);
+      }
+
+      if (isNaN(date.getTime())) return '';
+
+      if (isToday(date)) {
+        return format(date, 'HH:mm');
+      }
+      if (isYesterday(date)) {
+        return 'Yesterday';
+      }
+      return format(date, 'dd/MM/yy');
+    } catch (e) {
+      return '';
     }
-    if (isYesterday(date)) {
-      return 'Yesterday';
-    }
-    return format(date, 'dd/MM/yy');
   };
 
   // Filter contacts based on active tab and search query
