@@ -22,6 +22,90 @@ app.get('/', (req, res) => {
   res.send('WhatsApp CRM Webhook Server is running!');
 });
 
+// Helper function to dispatch outbound WhatsApp messages via Meta Graph API & store in Firestore
+async function dispatchOutboundWhatsAppMessage({ phone, body, type = 'text', templateName = null, templateComponents = [] }) {
+  let phoneNumberId = process.env.META_PHONE_NUMBER_ID;
+  let accessToken = process.env.META_ACCESS_TOKEN;
+
+  // Try to load credentials from Firestore settings/metaConfig if not in env
+  try {
+    const configSnap = await db.doc('settings/metaConfig').get();
+    if (configSnap.exists) {
+      const configData = configSnap.data();
+      if (configData.phoneNumberId) phoneNumberId = configData.phoneNumberId;
+      if (configData.accessToken) accessToken = configData.accessToken;
+    }
+  } catch (e) {
+    console.warn('Could not read settings/metaConfig from Firestore');
+  }
+
+  const nowMs = Date.now();
+  let metaMsgId = `wamid_out_${nowMs}_${Math.random().toString(36).substr(2, 4)}`;
+
+  if (phoneNumberId && accessToken) {
+    try {
+      let metaPayload = {
+        messaging_product: 'whatsapp',
+        recipient_type: 'individual',
+        to: phone
+      };
+
+      if (type === 'template') {
+        metaPayload.type = 'template';
+        metaPayload.template = {
+          name: templateName,
+          language: { code: 'en_US' },
+          components: templateComponents
+        };
+      } else {
+        metaPayload.type = 'text';
+        metaPayload.text = { preview_url: false, body: body };
+      }
+
+      const metaRes = await axios.post(
+        `https://graph.facebook.com/v20.0/${phoneNumberId}/messages`,
+        metaPayload,
+        {
+          headers: {
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+
+      metaMsgId = metaRes.data?.messages?.[0]?.id || metaMsgId;
+      console.log(`Successfully dispatched Meta WhatsApp message to ${phone}: ${metaMsgId}`);
+    } catch (err) {
+      console.error('Error sending WhatsApp message via Meta Graph API:', err.response?.data || err.message);
+    }
+  } else {
+    console.warn('Meta credentials (phoneNumberId / accessToken) not found. Saving outbound message in Firestore only.');
+  }
+
+  // Store outbound message in Firestore chats/{phone}/messages/{metaMsgId}
+  const messageRef = db.collection('chats').doc(phone).collection('messages').doc(metaMsgId);
+  await messageRef.set({
+    id: metaMsgId,
+    from: 'business',
+    to: phone,
+    type: type,
+    body: body,
+    templateName: templateName,
+    status: 'sent',
+    timestamp: admin.firestore.Timestamp.fromMillis(nowMs),
+    direction: 'outbound'
+  });
+
+  // Update contact document lastMessage and lastMessageTimestamp
+  const contactRef = db.collection('contacts').doc(phone);
+  await contactRef.set({
+    lastMessage: type === 'template' ? `[Template] ${templateName}` : body,
+    lastMessageTimestamp: admin.firestore.Timestamp.fromMillis(nowMs)
+  }, { merge: true }).catch(() => {});
+
+  return metaMsgId;
+}
+
 // ----------------------------------------------------------------------
 // 1. GET /webhook (Meta Webhook Challenge Verification)
 // ----------------------------------------------------------------------
@@ -64,7 +148,6 @@ app.post('/webhook', async (req, res) => {
               const profileName = contactInfo?.profile?.name || `Customer ${phone ? phone.slice(-4) : ''}`;
 
               // Sanitize timestamp: Meta test payloads send ancient sample timestamps like 1504902988 (2017).
-              // If timestamp is invalid or older than 2024, default to current server time Date.now()
               let parsedTime = parseInt(message.timestamp, 10) * 1000;
               const timestamp = (!isNaN(parsedTime) && parsedTime > 1704067200000) ? parsedTime : Date.now();
               const messageId = message.id;
@@ -132,6 +215,19 @@ app.post('/webhook', async (req, res) => {
               });
 
               console.log(`Inbound message saved for ${phone} (${profileName}): ${msgBody}`);
+
+              // 3. Automated Trigger Check for "get investment details" (case-insensitive)
+              const incomingText = `${msgBody || ''} ${buttonPayload || ''}`.toLowerCase();
+              if (incomingText.includes('get investment details')) {
+                console.log(`Triggering automated Yas Island investment details reply for ${phone}`);
+                const autoReplyText = `Thanks for your interest in Yas Island! 🌴\n\nWe’ve received your response — one of our specialists will contact you shortly with full investment details.\n\nTo help us tailor the best options, feel free to share your budget, and preferred unit type below 🤝`;
+
+                await dispatchOutboundWhatsAppMessage({
+                  phone,
+                  body: autoReplyText,
+                  type: 'text'
+                });
+              }
             }
           }
 
@@ -203,78 +299,19 @@ app.post('/api/send-message', async (req, res) => {
   }
 
   try {
-    // 1. Fetch Meta WABA credentials from Firestore settings/metaConfig
-    const configSnap = await db.doc('settings/metaConfig').get();
-    if (!configSnap.exists) {
-      return res.status(500).json({ error: 'Meta Cloud API credentials not configured in settings/metaConfig' });
-    }
-    const { phoneNumberId, accessToken } = configSnap.data();
-
-    if (!phoneNumberId || !accessToken) {
-      return res.status(500).json({ error: 'phoneNumberId or accessToken missing in metaConfig' });
-    }
-
-    // 2. Construct Meta Graph API payload
-    let metaPayload = {
-      messaging_product: 'whatsapp',
-      recipient_type: 'individual',
-      to: phone
-    };
-
-    if (type === 'template') {
-      metaPayload.type = 'template';
-      metaPayload.template = {
-        name: templateName,
-        language: { code: 'en_US' },
-        components: templateComponents
-      };
-    } else {
-      metaPayload.type = 'text';
-      metaPayload.text = { preview_url: false, body: body };
-    }
-
-    // 3. Dispatch POST request to Meta Graph API
-    const metaRes = await axios.post(
-      `https://graph.facebook.com/v20.0/${phoneNumberId}/messages`,
-      metaPayload,
-      {
-        headers: {
-          'Authorization': `Bearer ${accessToken}`,
-          'Content-Type': 'application/json'
-        }
-      }
-    );
-
-    const metaMsgId = metaRes.data?.messages?.[0]?.id || `wamid_out_${Date.now()}`;
-    const timestamp = Date.now();
-
-    // 4. Save outbound message to Firestore
-    const msgRef = db.collection('chats').doc(phone).collection('messages').doc(metaMsgId);
-    await msgRef.set({
-      id: metaMsgId,
-      from: 'business',
-      to: phone,
-      type: type,
-      body: body,
-      templateName: templateName,
-      status: 'sent',
-      timestamp: admin.firestore.Timestamp.fromMillis(timestamp),
-      direction: 'outbound'
+    const metaMsgId = await dispatchOutboundWhatsAppMessage({
+      phone,
+      body,
+      type,
+      templateName,
+      templateComponents
     });
-
-    // 5. Update contact summary
-    const contactRef = db.collection('contacts').doc(phone);
-    await contactRef.update({
-      lastMessage: type === 'template' ? `[Template] ${templateName}` : body,
-      lastMessageTimestamp: admin.firestore.Timestamp.fromMillis(timestamp)
-    });
-
     return res.status(200).json({ success: true, messageId: metaMsgId });
   } catch (error) {
-    console.error('Outbound Meta API error:', error.response?.data || error.message);
+    console.error('Outbound Meta API error:', error.message);
     return res.status(500).json({
       error: 'Failed to send WhatsApp message via Meta Cloud API',
-      details: error.response?.data || error.message
+      details: error.message
     });
   }
 });
@@ -291,5 +328,3 @@ if (functions) {
 }
 
 module.exports = app;
-
-
