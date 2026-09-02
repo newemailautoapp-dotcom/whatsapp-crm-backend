@@ -235,43 +235,87 @@ app.post('/webhook', async (req, res) => {
           if (value.statuses && value.statuses.length > 0) {
             for (const statusUpdate of value.statuses) {
               const statusMessageId = statusUpdate.id;
-              const recipientPhone = statusUpdate.recipient_id;
+              const recipientPhone = statusUpdate.recipient_id ? statusUpdate.recipient_id.replace(/^\+/, '') : null;
               const newStatus = statusUpdate.status; // 'sent' | 'delivered' | 'read' | 'failed'
+              
+              let statusTime = admin.firestore.Timestamp.now();
+              if (statusUpdate.timestamp) {
+                const parsed = parseInt(statusUpdate.timestamp, 10) * 1000;
+                if (!isNaN(parsed) && parsed > 1704067200000) {
+                  statusTime = admin.firestore.Timestamp.fromMillis(parsed);
+                }
+              }
+              const nowTimestamp = admin.firestore.Timestamp.now();
 
-              let updated = false;
-
-              // Direct path update if recipient_id is available
               if (recipientPhone && statusMessageId) {
                 try {
+                  // 1. Check & Auto-create Contact/Lead document if it does not exist
+                  const contactRef = db.collection('contacts').doc(recipientPhone);
+                  const contactSnap = await contactRef.get();
+
+                  if (!contactSnap.exists) {
+                    await contactRef.set({
+                      name: `Lead +${recipientPhone}`,
+                      phone: recipientPhone,
+                      leadClass: 'Inbound',
+                      leadRating: 'New Lead',
+                      createdAt: nowTimestamp,
+                      lastMessage: 'Template Sent',
+                      lastMessageTimestamp: statusTime,
+                      unreadCount: 0,
+                      is24hActive: false,
+                      windowExpiry: 0,
+                      tags: ['Broadcast Lead', 'External Outreach'],
+                      optedOut: false,
+                      notes: 'Auto-registered via outbound template status webhook.'
+                    }, { merge: true });
+                    console.log(`Auto-registered lead document for recipient +${recipientPhone}`);
+                  } else {
+                    // Update contact summary for existing lead
+                    await contactRef.set({
+                      lastMessage: contactSnap.data()?.lastMessage || 'Template Sent',
+                      lastMessageTimestamp: statusTime
+                    }, { merge: true });
+                  }
+
+                  // 2. Create/Merge message in chats/{recipientPhone}/messages/{statusMessageId}
                   const msgRef = db.collection('chats').doc(recipientPhone).collection('messages').doc(statusMessageId);
-                  await msgRef.update({
+                  await msgRef.set({
+                    id: statusMessageId,
+                    from: 'business',
+                    to: recipientPhone,
+                    sender: 'agent',
+                    type: 'template',
+                    body: '[Template Message Sent]',
                     status: newStatus,
-                    statusTimestamp: admin.firestore.Timestamp.now()
-                  });
-                  updated = true;
-                } catch (e) {
-                  // Direct doc update failed, fallback to collection group query
+                    timestamp: statusTime,
+                    direction: 'outbound',
+                    statusTimestamp: nowTimestamp
+                  }, { merge: true });
+
+                  console.log(`Status merged for message ${statusMessageId} (${recipientPhone}): ${newStatus}`);
+                } catch (err) {
+                  console.warn(`Error updating status for ${statusMessageId}:`, err.message);
                 }
               }
 
-              // Collection group query fallback if direct update didn't run or failed
-              if (!updated && statusMessageId) {
+              // 3. Collection Group query fallback to update any existing docs matching statusMessageId
+              if (statusMessageId) {
                 try {
                   const querySnap = await db.collectionGroup('messages').where('id', '==', statusMessageId).get();
-                  const batch = db.batch();
-                  querySnap.forEach(docSnap => {
-                    batch.update(docSnap.ref, {
-                      status: newStatus,
-                      statusTimestamp: admin.firestore.Timestamp.now()
+                  if (!querySnap.empty) {
+                    const batch = db.batch();
+                    querySnap.forEach(docSnap => {
+                      batch.set(docSnap.ref, {
+                        status: newStatus,
+                        statusTimestamp: nowTimestamp
+                      }, { merge: true });
                     });
-                  });
-                  await batch.commit();
-                  console.log(`Status updated via Collection Group for ${statusMessageId}: ${newStatus}`);
+                    await batch.commit();
+                  }
                 } catch (err) {
-                  console.warn(`Could not update status for message ${statusMessageId}:`, err.message);
+                  console.warn(`Collection group status update failed for ${statusMessageId}:`, err.message);
                 }
-              } else if (updated) {
-                console.log(`Status updated for message ${statusMessageId}: ${newStatus}`);
               }
             }
           }
