@@ -284,18 +284,29 @@ app.post('/webhook', async (req, res) => {
 
                   // 2. Create/Merge message in chats/{recipientPhone}/messages/{statusMessageId}
                   const msgRef = db.collection('chats').doc(recipientPhone).collection('messages').doc(statusMessageId);
-                  await msgRef.set({
-                    id: statusMessageId,
-                    from: 'business',
-                    to: recipientPhone,
-                    sender: 'agent',
-                    type: 'template',
-                    body: '[Template Message Sent]',
-                    status: newStatus,
-                    timestamp: statusTime,
-                    direction: 'outbound',
-                    statusTimestamp: nowTimestamp
-                  }, { merge: true });
+                  const msgSnap = await msgRef.get();
+
+                  if (msgSnap.exists) {
+                    // Update ONLY status for existing message so text replies are preserved
+                    await msgRef.update({
+                      status: newStatus,
+                      statusTimestamp: nowTimestamp
+                    });
+                  } else {
+                    // Create new doc for external outbound template/broadcast message
+                    await msgRef.set({
+                      id: statusMessageId,
+                      from: 'business',
+                      to: recipientPhone,
+                      sender: 'agent',
+                      type: 'template',
+                      body: '[Template Message Sent]',
+                      status: newStatus,
+                      timestamp: statusTime,
+                      direction: 'outbound',
+                      statusTimestamp: nowTimestamp
+                    });
+                  }
 
                   console.log(`Status merged for message ${statusMessageId} (${recipientPhone}): ${newStatus}`);
                 } catch (err) {

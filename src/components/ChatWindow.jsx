@@ -162,14 +162,6 @@ export default function ChatWindow({
           )}
 
           <button 
-            onClick={() => setShowTemplateModal(true)}
-            className="px-3 py-1.5 bg-[#00a884] hover:bg-[#008069] text-[#111b21] text-xs font-bold rounded-lg flex items-center gap-1.5 transition-colors"
-          >
-            <Sparkles className="w-3.5 h-3.5" />
-            Meta Templates
-          </button>
-
-          <button 
             onClick={onToggleRightSidebar}
             title="Toggle Lead Profile & Notes"
             className={`p-2 rounded-full text-[#8696a0] hover:text-[#e9edef] hover:bg-[#2a3942] transition-colors ${
@@ -226,7 +218,7 @@ export default function ChatWindow({
                     <div className="mb-1.5 pb-1 border-b border-white/10 flex items-center justify-between text-[11px] font-semibold text-[#00a884]">
                       <span className="flex items-center gap-1">
                         <Sparkles className="w-3 h-3" />
-                        Template: {msg.templateName}
+                        Template: {msg.templateName || 'META APPROVED'}
                       </span>
                       <span className="bg-[#00a884]/20 px-1.5 py-0.5 rounded text-[10px]">META APPROVED</span>
                     </div>
