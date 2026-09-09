@@ -48,6 +48,22 @@ export default function WebhookSimulator({ contacts = [], selectedContact, onClo
     });
   };
 
+  const handlePreRegisterPreset = async () => {
+    setPhone('971501234567');
+    setName('Rashid Al-Maktoum');
+    setMsgBody('Pre Register');
+    setSimType('button_reply');
+    setButtonPayload('PAYLOAD_PRE_REGISTER');
+
+    await simulateInboundMessage({
+      phone: '971501234567',
+      name: 'Rashid Al-Maktoum',
+      body: 'Pre Register',
+      type: 'button_reply',
+      buttonPayload: 'PAYLOAD_PRE_REGISTER'
+    });
+  };
+
   return (
     <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
       <div className="bg-[#202c33] border border-[#222d34] rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden animate-fade-in">
@@ -65,7 +81,24 @@ export default function WebhookSimulator({ contacts = [], selectedContact, onClo
           </button>
         </div>
 
-        <div className="p-5 space-y-5 max-h-[75vh] overflow-y-auto">
+        <div className="p-5 space-y-4 max-h-[75vh] overflow-y-auto">
+          {/* Quick Preset: Sei Saadiyat Pre Register */}
+          <div className="bg-[#00a884]/10 border border-[#00a884]/30 rounded-xl p-3.5 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <Building2 className="w-6 h-6 text-[#00a884]" />
+              <div>
+                <h4 className="text-xs font-bold text-[#e9edef]">Sei Saadiyat Pre Register</h4>
+                <p className="text-[11px] text-[#8696a0]">Simulate customer clicking "Pre Register"</p>
+              </div>
+            </div>
+            <button
+              onClick={handlePreRegisterPreset}
+              className="px-3 py-1.5 bg-[#00a884] hover:bg-[#008069] text-[#111b21] text-xs font-bold rounded-lg transition-colors"
+            >
+              Trigger Pre Register
+            </button>
+          </div>
+
           {/* Quick Preset: Yas Island Campaign Action */}
           <div className="bg-[#00a884]/10 border border-[#00a884]/30 rounded-xl p-3.5 flex items-center justify-between">
             <div className="flex items-center gap-3">
