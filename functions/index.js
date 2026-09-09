@@ -24,25 +24,30 @@ app.get('/', (req, res) => {
 
 // Helper function to dispatch outbound WhatsApp messages via Meta Graph API & store in Firestore
 async function dispatchOutboundWhatsAppMessage({ phone, body, type = 'text', templateName = null, templateComponents = [] }) {
-  let phoneNumberId = process.env.META_PHONE_NUMBER_ID;
-  let accessToken = process.env.META_ACCESS_TOKEN;
+  let phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID || process.env.PHONE_NUMBER_ID || process.env.META_PHONE_NUMBER_ID;
+  let accessToken = process.env.WHATSAPP_ACCESS_TOKEN || process.env.WHATSAPP_TOKEN || process.env.META_ACCESS_TOKEN;
 
-  // Try to load credentials from Firestore settings/metaConfig if not in env
-  try {
-    const configSnap = await db.doc('settings/metaConfig').get();
-    if (configSnap.exists) {
-      const configData = configSnap.data();
-      if (configData.phoneNumberId) phoneNumberId = configData.phoneNumberId;
-      if (configData.accessToken) accessToken = configData.accessToken;
+  // Only fallback to Firestore settings/metaConfig if credentials are missing in process.env
+  if (!phoneNumberId || !accessToken) {
+    try {
+      const configSnap = await db.doc('settings/metaConfig').get();
+      if (configSnap.exists) {
+        const configData = configSnap.data();
+        if (!phoneNumberId && configData.phoneNumberId) phoneNumberId = configData.phoneNumberId;
+        if (!accessToken && configData.accessToken && !configData.accessToken.includes('demo')) {
+          accessToken = configData.accessToken;
+        }
+      }
+    } catch (e) {
+      console.warn('Could not read settings/metaConfig from Firestore');
     }
-  } catch (e) {
-    console.warn('Could not read settings/metaConfig from Firestore');
   }
 
   const nowMs = Date.now();
   let metaMsgId = `wamid_out_${nowMs}_${Math.random().toString(36).substr(2, 4)}`;
 
   if (phoneNumberId && accessToken) {
+    console.log(`Dispatching Meta WhatsApp msg to ${phone} using PhoneID: ${phoneNumberId}, Token: ${accessToken.substring(0, 12)}...`);
     try {
       let metaPayload = {
         messaging_product: 'whatsapp',
