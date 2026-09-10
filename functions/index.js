@@ -226,11 +226,17 @@ app.get('/webhook', (req, res) => {
   return res.sendStatus(403);
 });
 
+// Global In-Memory Idempotency Cache for Deduplicating Webhook Events
+const processedMessageIds = new Set();
+
 // ----------------------------------------------------------------------
 // 2. POST /webhook (Meta Webhook Inbound Message & Status Handler)
 // ----------------------------------------------------------------------
 app.post('/webhook', async (req, res) => {
   const body = req.body;
+
+  // Immediately respond 200 OK to Meta to prevent webhook HTTP retries
+  res.status(200).send('EVENT_RECEIVED');
 
   if (body.object === 'whatsapp_business_account') {
     try {
@@ -241,17 +247,40 @@ app.post('/webhook', async (req, res) => {
           const value = change.value;
           if (!value) continue;
 
-          // A) Process Inbound Messages
+          // A) Process Inbound Messages (User clicks & text replies ONLY)
           if (value.messages && value.messages.length > 0) {
             for (const message of value.messages) {
-              const contactInfo = value.contacts?.find(c => c.wa_id === message.from) || value.contacts?.[0];
-              const phone = message.from; // Sender WhatsApp phone
-              const profileName = contactInfo?.profile?.name || `Customer ${phone ? phone.slice(-4) : ''}`;
+              const messageId = message.id;
 
-              // Sanitize timestamp: Meta test payloads send ancient sample timestamps like 1504902988 (2017).
+              // 1. Idempotency Check: Skip duplicate webhooks for the exact same message ID (wamid)
+              if (messageId && processedMessageIds.has(messageId)) {
+                console.log(`[DEDUP GUARD] Skipping already processed message ID: ${messageId}`);
+                continue;
+              }
+              if (messageId) {
+                processedMessageIds.add(messageId);
+                if (processedMessageIds.size > 5000) {
+                  const firstKey = processedMessageIds.values().next().value;
+                  processedMessageIds.delete(firstKey);
+                }
+              }
+
+              const rawPhone = message.from; // Sender WhatsApp phone
+              const cleanPhone = (rawPhone || '').replace(/^\+/, '');
+              const mitchellPhone = (process.env.MITCHELL_PHONE || '971585687075').replace(/^\+/, '');
+              const businessPhone = (process.env.WHATSAPP_PHONE_NUMBER_ID || process.env.PHONE_NUMBER_ID || '1293265723876318').replace(/^\+/, '');
+
+              // 2. SENDER GUARD: Completely ignore events originating from Mitchell's number or Business Sender ID
+              if (cleanPhone === mitchellPhone || cleanPhone === '971585687075' || cleanPhone === businessPhone || cleanPhone.includes('1293265723876318')) {
+                console.log(`[SENDER GUARD] Ignoring incoming webhook event/message from Mitchell or Business ID (${cleanPhone})`);
+                continue;
+              }
+
+              const contactInfo = value.contacts?.find(c => c.wa_id === message.from) || value.contacts?.[0];
+              const profileName = contactInfo?.profile?.name || `Customer ${cleanPhone ? cleanPhone.slice(-4) : ''}`;
+
               let parsedTime = parseInt(message.timestamp, 10) * 1000;
               const timestamp = (!isNaN(parsedTime) && parsedTime > 1704067200000) ? parsedTime : Date.now();
-              const messageId = message.id;
               const msgType = message.type;
 
               let msgBody = '';
@@ -271,15 +300,15 @@ app.post('/webhook', async (req, res) => {
                 msgBody = `[${msgType.toUpperCase()} Message Received]`;
               }
 
-              // 1. Auto-upsert Contact document into Firestore contacts/{phone}
-              const contactRef = db.collection('contacts').doc(phone);
+              // Auto-upsert Contact document into Firestore contacts/{phone}
+              const contactRef = db.collection('contacts').doc(cleanPhone);
               const contactSnap = await contactRef.get();
               const windowExpiry = timestamp + (24 * 60 * 60 * 1000); // 24 Hours from now
 
               if (!contactSnap.exists) {
                 await contactRef.set({
                   name: profileName,
-                  phone: phone,
+                  phone: cleanPhone,
                   lastMessage: msgBody,
                   lastMessageTimestamp: admin.firestore.Timestamp.fromMillis(timestamp),
                   unreadCount: 1,
@@ -301,11 +330,11 @@ app.post('/webhook', async (req, res) => {
                 });
               }
 
-              // 2. Save Message document into Firestore chats/{phone}/messages/{messageId}
-              const messageRef = db.collection('chats').doc(phone).collection('messages').doc(messageId);
+              // Save Message document into Firestore chats/{phone}/messages/{messageId}
+              const messageRef = db.collection('chats').doc(cleanPhone).collection('messages').doc(messageId);
               await messageRef.set({
                 id: messageId,
-                from: phone,
+                from: cleanPhone,
                 to: 'business',
                 type: msgType === 'interactive' || msgType === 'button' ? 'button_reply' : msgType,
                 body: msgBody,
@@ -315,79 +344,61 @@ app.post('/webhook', async (req, res) => {
                 direction: 'inbound'
               });
 
-              console.log(`Inbound message saved for ${phone} (${profileName}): ${msgBody}`);
+              console.log(`Inbound message saved for ${cleanPhone} (${profileName}): ${msgBody}`);
 
-              // 3. Automated Trigger Check for "get investment details" (case-insensitive)
+              // Automated Trigger Check for "get investment details" (case-insensitive)
               const incomingText = `${msgBody || ''} ${buttonPayload || ''}`.toLowerCase();
               if (incomingText.includes('get investment details')) {
-                console.log(`Triggering automated Yas Island investment details reply for ${phone}`);
+                console.log(`Triggering automated Yas Island investment details reply for ${cleanPhone}`);
                 const autoReplyText = `Thanks for your interest in Yas Island! 🌴\n\nWe’ve received your response — one of our specialists will contact you shortly with full investment details.\n\nTo help us tailor the best options, feel free to share your budget, and preferred unit type below 🤝`;
 
                 await dispatchOutboundWhatsAppMessage({
-                  phone,
+                  phone: cleanPhone,
                   body: autoReplyText,
                   type: 'text'
                 });
               }
 
-              // 4. Automated Trigger Check for "Pre Register" (case-insensitive)
+              // Automated Trigger Check for "Pre Register" (case-insensitive)
               if (incomingText.includes('pre register') || incomingText.includes('pre-register') || incomingText.includes('preregister')) {
-                const mitchellPhone = process.env.MITCHELL_PHONE || '971585687075';
-                const cleanPhone = (phone || '').replace(/^\+/, '');
-                console.log(`Triggering automated Sei Saadiyat Pre Register reply & instant WhatsApp lead alert to Mitchell (${mitchellPhone}) for lead ${phone} (${profileName})`);
+                console.log(`Triggering automated Sei Saadiyat Pre Register reply & single WhatsApp lead alert to Mitchell (${mitchellPhone}) for lead ${cleanPhone} (${profileName})`);
 
                 const seiSaadiyatAutoReply = `Thank you for your interest in Sei Saadiyat. \n\nYour pre-registration has been successfully received. \n\nOur Senior Property Advisor, Mitchell, will be handling your inquiry directly. You can also connect with him immediately via WhatsApp or call for priority allocations, floor plans, and pricing details:\n\n📱 Direct Line: +971 58 568 7075\n\nWe look forward to assisting you.`;
 
                 const mitchellLeadNotification = `🚨 *New Lead Captured!*\nName: ${profileName || 'Valued Lead'}\nPhone: +${cleanPhone}\nWhatsApp Link: https://wa.me/${cleanPhone}`;
 
-                // Parallel execution:
-                // 1. Send auto-reply to the lead
-                // 2. Send instant WhatsApp lead notification directly to Mitchell (971585687075)
-                // 3. Send email notification (if configured)
-                const promises = [
+                // Fire outbound responses concurrently
+                await Promise.all([
                   dispatchOutboundWhatsAppMessage({
-                    phone,
+                    phone: cleanPhone,
                     body: seiSaadiyatAutoReply,
                     type: 'text'
-                  })
-                ];
-
-                // Don't loop infinitely if Mitchell himself tests "Pre Register"
-                if (cleanPhone !== mitchellPhone) {
-                  promises.push(
-                    dispatchOutboundWhatsAppMessage({
-                      phone: mitchellPhone,
-                      body: mitchellLeadNotification,
-                      type: 'text'
-                    })
-                  );
-                } else {
-                  console.log('Skipping duplicate alert to Mitchell since the sender phone is Mitchell himself.');
-                }
-
-                promises.push(
+                  }),
+                  dispatchOutboundWhatsAppMessage({
+                    phone: mitchellPhone,
+                    body: mitchellLeadNotification,
+                    type: 'text'
+                  }),
                   sendLeadEmailNotification({
                     leadName: profileName,
-                    leadPhone: phone
+                    leadPhone: cleanPhone
                   })
-                );
-
-                await Promise.all(promises);
+                ]);
               }
             }
           }
 
-          // B) Process Delivery Status Updates (sent, delivered, read, failed)
+          // B) Process Delivery Status Updates ONLY (Updates ticks in Firestore, NO AUTO-REPLIES OR ALERTS FIRED)
           if (value.statuses && value.statuses.length > 0) {
             for (const statusUpdate of value.statuses) {
               const statusMessageId = statusUpdate.id;
               const recipientPhone = statusUpdate.recipient_id ? statusUpdate.recipient_id.replace(/^\+/, '') : null;
-              const newStatus = statusUpdate.status; // 'sent' | 'delivered' | 'read' | 'failed'
-              
+              const newStatus = statusUpdate.status;
+
               if (newStatus === 'failed') {
                 console.log('FAILED_ERROR:', JSON.stringify(statusUpdate.errors || statusUpdate.error || statusUpdate));
               }
-              
+
               let statusTime = admin.firestore.Timestamp.now();
               if (statusUpdate.timestamp) {
                 const parsed = parseInt(statusUpdate.timestamp, 10) * 1000;
@@ -399,7 +410,6 @@ app.post('/webhook', async (req, res) => {
 
               if (recipientPhone && statusMessageId) {
                 try {
-                  // 1. Check & Auto-create Contact/Lead document if it does not exist
                   const contactRef = db.collection('contacts').doc(recipientPhone);
                   const contactSnap = await contactRef.get();
 
@@ -419,27 +429,22 @@ app.post('/webhook', async (req, res) => {
                       optedOut: false,
                       notes: 'Auto-registered via outbound template status webhook.'
                     }, { merge: true });
-                    console.log(`Auto-registered lead document for recipient +${recipientPhone}`);
                   } else {
-                    // Update contact summary for existing lead
                     await contactRef.set({
                       lastMessage: contactSnap.data()?.lastMessage || 'Template Sent',
                       lastMessageTimestamp: statusTime
                     }, { merge: true });
                   }
 
-                  // 2. Create/Merge message in chats/{recipientPhone}/messages/{statusMessageId}
                   const msgRef = db.collection('chats').doc(recipientPhone).collection('messages').doc(statusMessageId);
                   const msgSnap = await msgRef.get();
 
                   if (msgSnap.exists) {
-                    // Update ONLY status for existing message so text replies are preserved
                     await msgRef.update({
                       status: newStatus,
                       statusTimestamp: nowTimestamp
                     });
                   } else {
-                    // Create new doc for external outbound template/broadcast message
                     await msgRef.set({
                       id: statusMessageId,
                       from: 'business',
@@ -453,40 +458,16 @@ app.post('/webhook', async (req, res) => {
                       statusTimestamp: nowTimestamp
                     });
                   }
-
-                  console.log(`Status merged for message ${statusMessageId} (${recipientPhone}): ${newStatus}`);
                 } catch (err) {
                   console.warn(`Error updating status for ${statusMessageId}:`, err.message);
-                }
-              }
-
-              // 3. Collection Group query fallback to update any existing docs matching statusMessageId
-              if (statusMessageId) {
-                try {
-                  const querySnap = await db.collectionGroup('messages').where('id', '==', statusMessageId).get();
-                  if (!querySnap.empty) {
-                    const batch = db.batch();
-                    querySnap.forEach(docSnap => {
-                      batch.set(docSnap.ref, {
-                        status: newStatus,
-                        statusTimestamp: nowTimestamp
-                      }, { merge: true });
-                    });
-                    await batch.commit();
-                  }
-                } catch (err) {
-                  console.warn(`Collection group status update failed for ${statusMessageId}:`, err.message);
                 }
               }
             }
           }
         }
       }
-
-      return res.status(200).send('EVENT_RECEIVED');
     } catch (error) {
       console.error('Error processing Meta Webhook payload:', error);
-      return res.status(500).send('INTERNAL_SERVER_ERROR');
     }
   } else {
     return res.sendStatus(404);
