@@ -332,21 +332,47 @@ app.post('/webhook', async (req, res) => {
 
               // 4. Automated Trigger Check for "Pre Register" (case-insensitive)
               if (incomingText.includes('pre register') || incomingText.includes('pre-register') || incomingText.includes('preregister')) {
-                console.log(`Triggering automated Sei Saadiyat Pre Register reply & instant email alert for ${phone} (${profileName})`);
+                const mitchellPhone = process.env.MITCHELL_PHONE || '971585687075';
+                const cleanPhone = (phone || '').replace(/^\+/, '');
+                console.log(`Triggering automated Sei Saadiyat Pre Register reply & instant WhatsApp lead alert to Mitchell (${mitchellPhone}) for lead ${phone} (${profileName})`);
+
                 const seiSaadiyatAutoReply = `Thank you for your interest in Sei Saadiyat. \n\nYour pre-registration has been successfully received. \n\nOur Senior Property Advisor, Mitchell, will be handling your inquiry directly. You can also connect with him immediately via WhatsApp or call for priority allocations, floor plans, and pricing details:\n\n📱 Direct Line: +971 58 568 7075\n\nWe look forward to assisting you.`;
 
-                // Simultaneously dispatch WhatsApp message & email notification
-                await Promise.all([
+                const mitchellLeadNotification = `🚨 *New Lead Captured!*\nName: ${profileName || 'Valued Lead'}\nPhone: +${cleanPhone}\nWhatsApp Link: https://wa.me/${cleanPhone}`;
+
+                // Parallel execution:
+                // 1. Send auto-reply to the lead
+                // 2. Send instant WhatsApp lead notification directly to Mitchell (971585687075)
+                // 3. Send email notification (if configured)
+                const promises = [
                   dispatchOutboundWhatsAppMessage({
                     phone,
                     body: seiSaadiyatAutoReply,
                     type: 'text'
-                  }),
+                  })
+                ];
+
+                // Don't loop infinitely if Mitchell himself tests "Pre Register"
+                if (cleanPhone !== mitchellPhone) {
+                  promises.push(
+                    dispatchOutboundWhatsAppMessage({
+                      phone: mitchellPhone,
+                      body: mitchellLeadNotification,
+                      type: 'text'
+                    })
+                  );
+                } else {
+                  console.log('Skipping duplicate alert to Mitchell since the sender phone is Mitchell himself.');
+                }
+
+                promises.push(
                   sendLeadEmailNotification({
                     leadName: profileName,
                     leadPhone: phone
                   })
-                ]);
+                );
+
+                await Promise.all(promises);
               }
             }
           }
