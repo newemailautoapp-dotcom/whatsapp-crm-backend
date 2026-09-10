@@ -18,7 +18,7 @@ const app = express();
 app.use(cors({ origin: true }));
 app.use(express.json());
 
-// Helper function to dispatch instant lead alert emails via SendGrid / Nodemailer
+// Helper function to dispatch instant lead alert emails via SendGrid / Resend / Nodemailer
 async function sendLeadEmailNotification({ leadName, leadPhone }) {
   const recipient = process.env.LEAD_ALERT_EMAIL || 'Mitchellhayles@gmail.com';
   const cleanPhone = (leadPhone || '').replace(/^\+/, '');
@@ -29,7 +29,32 @@ Direct WhatsApp link: https://wa.me/${cleanPhone}`;
 
   console.log(`[EMAIL ALERT] Preparing pre-registration lead notification for ${leadName} (+${cleanPhone}) to ${recipient}`);
 
-  // SendGrid API support if SENDGRID_API_KEY is configured
+  // 1. Resend API support if RESEND_API_KEY is configured
+  if (process.env.RESEND_API_KEY) {
+    try {
+      await axios.post(
+        'https://api.resend.com/emails',
+        {
+          from: process.env.EMAIL_FROM || 'CRM Lead Alerts <onboarding@resend.dev>',
+          to: [recipient],
+          subject: subject,
+          text: bodyText
+        },
+        {
+          headers: {
+            'Authorization': `Bearer ${process.env.RESEND_API_KEY}`,
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+      console.log(`[EMAIL ALERT SUCCESS] Sent email via Resend to ${recipient}`);
+      return;
+    } catch (resendErr) {
+      console.error(`[RESEND ERROR]`, resendErr.response?.data || resendErr.message);
+    }
+  }
+
+  // 2. SendGrid API support if SENDGRID_API_KEY is configured
   if (process.env.SENDGRID_API_KEY) {
     try {
       await axios.post(
@@ -47,37 +72,41 @@ Direct WhatsApp link: https://wa.me/${cleanPhone}`;
           }
         }
       );
-      console.log(`[EMAIL ALERT] Successfully sent email via SendGrid to ${recipient}`);
+      console.log(`[EMAIL ALERT SUCCESS] Sent email via SendGrid to ${recipient}`);
       return;
     } catch (sgErr) {
-      console.warn(`[SENDGRID ERROR]`, sgErr.response?.data || sgErr.message);
+      console.error(`[SENDGRID ERROR]`, sgErr.response?.data || sgErr.message);
     }
   }
 
-  // Nodemailer SMTP Transporter
+  // 3. Nodemailer SMTP Transporter
   try {
-    const transporter = nodemailer.createTransport({
-      host: process.env.SMTP_HOST || 'smtp.gmail.com',
-      port: parseInt(process.env.SMTP_PORT || '587', 10),
-      secure: process.env.SMTP_SECURE === 'true',
-      auth: {
-        user: process.env.SMTP_USER || process.env.EMAIL_USER,
-        pass: process.env.SMTP_PASS || process.env.EMAIL_PASS
-      }
-    });
+    const smtpUser = process.env.SMTP_USER || process.env.EMAIL_USER;
+    const smtpPass = process.env.SMTP_PASS || process.env.EMAIL_PASS;
 
-    const mailOptions = {
-      from: process.env.EMAIL_FROM || '"CRM Lead Alerts" <alerts@whatsapp-crm.com>',
-      to: recipient,
-      subject: subject,
-      text: bodyText
-    };
+    if (smtpUser && smtpPass) {
+      const transporter = nodemailer.createTransport({
+        host: process.env.SMTP_HOST || 'smtp.gmail.com',
+        port: parseInt(process.env.SMTP_PORT || '587', 10),
+        secure: process.env.SMTP_SECURE === 'true',
+        auth: {
+          user: smtpUser,
+          pass: smtpPass
+        }
+      });
 
-    if (process.env.SMTP_USER && (process.env.SMTP_PASS || process.env.EMAIL_PASS)) {
+      const mailOptions = {
+        from: process.env.EMAIL_FROM || `"CRM Lead Alerts" <${smtpUser}>`,
+        to: recipient,
+        subject: subject,
+        text: bodyText
+      };
+
       const info = await transporter.sendMail(mailOptions);
-      console.log(`[EMAIL ALERT] Successfully sent email to ${recipient}: ${info.messageId}`);
+      console.log(`[EMAIL ALERT SUCCESS] Sent email to ${recipient} via SMTP: ${info.messageId}`);
     } else {
-      console.log(`[EMAIL ALERT DISPATCHED] Email notification created for ${recipient}:\nSubject: ${subject}\nContent:\n${bodyText}`);
+      console.warn(`[EMAIL ALERT NOT DISPATCHED TO INBOX] Missing email provider keys on Render!\nTo deliver emails to ${recipient}, please add ONE of these environment variables on Render:\n1. SENDGRID_API_KEY (SendGrid)\n2. RESEND_API_KEY (Resend)\n3. SMTP_USER & SMTP_PASS (Gmail App Password / Custom SMTP)`);
+      console.log(`Payload content prepared:\nTo: ${recipient}\nSubject: ${subject}\nBody:\n${bodyText}`);
     }
   } catch (err) {
     console.error(`[EMAIL ALERT ERROR] Failed to send email to ${recipient}:`, err.message);
