@@ -363,7 +363,7 @@ app.post('/webhook', async (req, res) => {
               if (incomingText.includes('pre register') || incomingText.includes('pre-register') || incomingText.includes('preregister')) {
                 console.log(`Triggering automated Sei Saadiyat Pre Register reply & single WhatsApp lead alert to Mitchell (${mitchellPhone}) for lead ${cleanPhone} (${profileName})`);
 
-                const seiSaadiyatAutoReply = `Thank you for your interest in Sei Saadiyat. \n\nYour pre-registration has been successfully received. \n\nOur Senior Property Advisor, Mitchell, will be handling your inquiry directly. You can also connect with him immediately via WhatsApp or call for priority allocations, floor plans, and pricing details:\n\n📱 Direct Line: +971 58 568 7075\n\nWe look forward to assisting you.`;
+                const seiSaadiyatAutoReply = `Thank you for your interest in Sei Saadiyat. \n\nYour pre-registration has been successfully received. \n\nOur Co-Founder, Mitchell, will be handling your inquiry directly. You can also connect with him immediately via WhatsApp or call for priority allocations, floor plans, and pricing details:\n\n📱 Direct Line: +971 58 568 7075\n\nWe look forward to assisting you.`;
 
                 const mitchellLeadNotification = `🚨 *New Lead Captured!*\nName: ${profileName || 'Valued Lead'}\nPhone: +${cleanPhone}\nWhatsApp Link: https://wa.me/${cleanPhone}`;
 
