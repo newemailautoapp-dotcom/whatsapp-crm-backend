@@ -395,6 +395,8 @@ app.post('/webhook', async (req, res) => {
               const recipientPhone = statusUpdate.recipient_id ? statusUpdate.recipient_id.replace(/^\+/, '') : null;
               const newStatus = statusUpdate.status;
 
+              console.log(`[STATUS UPDATE] Message to ${statusUpdate.recipient_id || recipientPhone} is now: ${newStatus}`);
+
               if (newStatus === 'failed') {
                 console.log('FAILED_ERROR:', JSON.stringify(statusUpdate.errors || statusUpdate.error || statusUpdate));
               }
