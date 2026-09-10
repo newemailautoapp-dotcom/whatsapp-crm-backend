@@ -9,6 +9,7 @@ const admin = require('firebase-admin');
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
+const nodemailer = require('nodemailer');
 
 admin.initializeApp();
 const db = admin.firestore();
@@ -16,6 +17,72 @@ const db = admin.firestore();
 const app = express();
 app.use(cors({ origin: true }));
 app.use(express.json());
+
+// Helper function to dispatch instant lead alert emails via SendGrid / Nodemailer
+async function sendLeadEmailNotification({ leadName, leadPhone }) {
+  const recipient = process.env.LEAD_ALERT_EMAIL || 'Mitchellhayles@gmail.com';
+  const cleanPhone = (leadPhone || '').replace(/^\+/, '');
+  const subject = `🚨 New Pre-Registration Lead Captured: ${leadName || 'Valued Lead'}`;
+  const bodyText = `Name: ${leadName || 'Valued Lead'}
+Phone: +${cleanPhone}
+Direct WhatsApp link: https://wa.me/${cleanPhone}`;
+
+  console.log(`[EMAIL ALERT] Preparing pre-registration lead notification for ${leadName} (+${cleanPhone}) to ${recipient}`);
+
+  // SendGrid API support if SENDGRID_API_KEY is configured
+  if (process.env.SENDGRID_API_KEY) {
+    try {
+      await axios.post(
+        'https://api.sendgrid.com/v3/mail/send',
+        {
+          personalizations: [{ to: [{ email: recipient }] }],
+          from: { email: process.env.EMAIL_FROM || 'alerts@whatsapp-crm.com', name: 'CRM Lead Alerts' },
+          subject: subject,
+          content: [{ type: 'text/plain', value: bodyText }]
+        },
+        {
+          headers: {
+            'Authorization': `Bearer ${process.env.SENDGRID_API_KEY}`,
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+      console.log(`[EMAIL ALERT] Successfully sent email via SendGrid to ${recipient}`);
+      return;
+    } catch (sgErr) {
+      console.warn(`[SENDGRID ERROR]`, sgErr.response?.data || sgErr.message);
+    }
+  }
+
+  // Nodemailer SMTP Transporter
+  try {
+    const transporter = nodemailer.createTransport({
+      host: process.env.SMTP_HOST || 'smtp.gmail.com',
+      port: parseInt(process.env.SMTP_PORT || '587', 10),
+      secure: process.env.SMTP_SECURE === 'true',
+      auth: {
+        user: process.env.SMTP_USER || process.env.EMAIL_USER,
+        pass: process.env.SMTP_PASS || process.env.EMAIL_PASS
+      }
+    });
+
+    const mailOptions = {
+      from: process.env.EMAIL_FROM || '"CRM Lead Alerts" <alerts@whatsapp-crm.com>',
+      to: recipient,
+      subject: subject,
+      text: bodyText
+    };
+
+    if (process.env.SMTP_USER && (process.env.SMTP_PASS || process.env.EMAIL_PASS)) {
+      const info = await transporter.sendMail(mailOptions);
+      console.log(`[EMAIL ALERT] Successfully sent email to ${recipient}: ${info.messageId}`);
+    } else {
+      console.log(`[EMAIL ALERT DISPATCHED] Email notification created for ${recipient}:\nSubject: ${subject}\nContent:\n${bodyText}`);
+    }
+  } catch (err) {
+    console.error(`[EMAIL ALERT ERROR] Failed to send email to ${recipient}:`, err.message);
+  }
+}
 
 // Root health check endpoint for Render / Uptime monitors
 app.get('/', (req, res) => {
@@ -236,14 +303,21 @@ app.post('/webhook', async (req, res) => {
 
               // 4. Automated Trigger Check for "Pre Register" (case-insensitive)
               if (incomingText.includes('pre register') || incomingText.includes('pre-register') || incomingText.includes('preregister')) {
-                console.log(`Triggering automated Sei Saadiyat Pre Register reply for ${phone}`);
+                console.log(`Triggering automated Sei Saadiyat Pre Register reply & instant email alert for ${phone} (${profileName})`);
                 const seiSaadiyatAutoReply = `Thank you for your interest in Sei Saadiyat. \n\nYour pre-registration has been successfully received. \n\nOur Senior Property Advisor, Mitchell, will be handling your inquiry directly. You can also connect with him immediately via WhatsApp or call for priority allocations, floor plans, and pricing details:\n\n📱 Direct Line: +971 58 568 7075\n\nWe look forward to assisting you.`;
 
-                await dispatchOutboundWhatsAppMessage({
-                  phone,
-                  body: seiSaadiyatAutoReply,
-                  type: 'text'
-                });
+                // Simultaneously dispatch WhatsApp message & email notification
+                await Promise.all([
+                  dispatchOutboundWhatsAppMessage({
+                    phone,
+                    body: seiSaadiyatAutoReply,
+                    type: 'text'
+                  }),
+                  sendLeadEmailNotification({
+                    leadName: profileName,
+                    leadPhone: phone
+                  })
+                ]);
               }
             }
           }
