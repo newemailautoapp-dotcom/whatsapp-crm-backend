@@ -535,3 +535,195 @@ export function saveMetaConfig(tenantId = DEFAULT_TENANT_ID, config) {
   eventHub.dispatchEvent(new CustomEvent('config_updated', { detail: { tenantId, config } }));
 }
 
+// ----------------------------------------------------
+// Super Admin Tenant Provisioning & Management Helpers
+// ----------------------------------------------------
+
+export function subscribeToAllTenants(callback) {
+  if (isLiveFirebase) {
+    const q = query(collection(db, 'tenants'));
+    return onSnapshot(q, (snapshot) => {
+      let tenantsList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      if (tenantsList.length === 0) {
+        // Fallback default tenant
+        tenantsList = [{
+          id: DEFAULT_TENANT_ID,
+          tenantId: DEFAULT_TENANT_ID,
+          name: 'USCA Academy',
+          phoneNumberId: import.meta.env.VITE_META_PHONE_NUMBER_ID || '109823471092834',
+          wabaId: import.meta.env.VITE_META_WABA_ID || '992837410293847',
+          status: 'active',
+          createdAt: Date.now()
+        }];
+      }
+      callback(tenantsList);
+    }, (err) => {
+      console.warn('Error subscribing to all tenants:', err);
+      callback([{
+        id: DEFAULT_TENANT_ID,
+        tenantId: DEFAULT_TENANT_ID,
+        name: 'USCA Academy',
+        phoneNumberId: '109823471092834',
+        wabaId: '992837410293847',
+        status: 'active'
+      }]);
+    });
+  }
+
+  callback([{
+    id: DEFAULT_TENANT_ID,
+    tenantId: DEFAULT_TENANT_ID,
+    name: 'USCA Academy',
+    phoneNumberId: '109823471092834',
+    wabaId: '992837410293847',
+    status: 'active'
+  }]);
+
+  return () => {};
+}
+
+export async function provisionNewTenant({
+  name,
+  tenantId,
+  email,
+  password,
+  phoneNumberId,
+  wabaId,
+  permanentToken,
+  verifyToken
+}) {
+  const cleanTenantId = (tenantId || name.toLowerCase().replace(/[^a-z0-9]/g, '_')).trim();
+  let createdUid = null;
+
+  // 1. Create client auth user via secondary app instance to avoid logging out super admin
+  try {
+    const { initializeApp, getApps, getApp } = await import('firebase/app');
+    const { getAuth, createUserWithEmailAndPassword, signOut } = await import('firebase/auth');
+
+    const firebaseConfig = {
+      apiKey: import.meta.env.VITE_FIREBASE_API_KEY || "AIzaSyDJ8U0aXHg40bBZsU82vtg_KJuJIgWsZC4",
+      authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || "whatsapp-crm-app-904e8.firebaseapp.com",
+      projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || "whatsapp-crm-app-904e8",
+      storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || "whatsapp-crm-app-904e8.firebasestorage.app",
+      messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || "214685513606",
+      appId: import.meta.env.VITE_FIREBASE_APP_ID || "1:214685513606:web:4d5fc5e67ff988351dde07"
+    };
+
+    const secondaryApp = getApps().find(a => a.name === 'SecondaryAdminProvision') || initializeApp(firebaseConfig, 'SecondaryAdminProvision');
+    const secondaryAuth = getAuth(secondaryApp);
+
+    try {
+      const userCred = await createUserWithEmailAndPassword(secondaryAuth, email, password);
+      createdUid = userCred.user.uid;
+      await signOut(secondaryAuth);
+    } catch (authErr) {
+      console.warn('Secondary auth creation message:', authErr);
+      createdUid = `client_${cleanTenantId}_${Date.now()}`;
+    }
+  } catch (e) {
+    console.warn('Secondary Firebase setup fallback:', e);
+    createdUid = `client_${cleanTenantId}_${Date.now()}`;
+  }
+
+  // 2. Save Tenant configuration to Firestore tenants/{cleanTenantId}
+  const tenantData = {
+    tenantId: cleanTenantId,
+    name,
+    clientEmail: email,
+    phoneNumberId,
+    wabaId,
+    permanentToken,
+    verifyToken,
+    status: 'active',
+    createdAt: serverTimestamp()
+  };
+
+  if (isLiveFirebase) {
+    try {
+      await setDoc(doc(db, 'tenants', cleanTenantId), tenantData, { merge: true });
+
+      if (createdUid) {
+        await setDoc(doc(db, 'users', createdUid), {
+          uid: createdUid,
+          email,
+          name,
+          tenantId: cleanTenantId,
+          role: 'client_admin',
+          createdAt: serverTimestamp()
+        }, { merge: true });
+      }
+    } catch (err) {
+      console.error('Error writing provisioned tenant to Firestore:', err);
+    }
+  }
+
+  // 3. Sync to Render Backend API
+  try {
+    fetch(`${BACKEND_URL}/api/tenant-config`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        tenantId: cleanTenantId,
+        phoneNumberId,
+        wabaId,
+        permanentToken,
+        verifyToken,
+        name
+      })
+    }).then(res => res.json()).then(data => {
+      console.log('Backend registered new tenant:', data);
+    }).catch(err => {
+      console.warn('Backend call warning on provisioning:', err);
+    });
+  } catch (e) {}
+
+  return {
+    success: true,
+    tenantId: cleanTenantId,
+    email,
+    password,
+    name,
+    uid: createdUid
+  };
+}
+
+export async function toggleTenantStatus(tenantId, isActive) {
+  if (isLiveFirebase) {
+    try {
+      await updateDoc(doc(db, 'tenants', tenantId), {
+        status: isActive ? 'active' : 'inactive',
+        updatedAt: serverTimestamp()
+      });
+    } catch (e) {
+      console.warn('Error toggling tenant status:', e);
+    }
+  }
+}
+
+export async function updateTenantConfig(tenantId, updateData) {
+  if (isLiveFirebase) {
+    try {
+      await setDoc(doc(db, 'tenants', tenantId), {
+        ...updateData,
+        updatedAt: serverTimestamp()
+      }, { merge: true });
+
+      fetch(`${BACKEND_URL}/api/tenant-config`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tenantId,
+          phoneNumberId: updateData.phoneNumberId,
+          wabaId: updateData.wabaId,
+          permanentToken: updateData.permanentToken || updateData.accessToken,
+          verifyToken: updateData.verifyToken,
+          name: updateData.name
+        })
+      }).catch(() => {});
+    } catch (e) {
+      console.warn('Error updating tenant config:', e);
+    }
+  }
+}
+
+

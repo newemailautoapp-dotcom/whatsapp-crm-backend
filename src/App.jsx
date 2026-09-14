@@ -5,6 +5,7 @@ import ContactDetails from './components/ContactDetails';
 import WebhookSimulator from './components/WebhookSimulator';
 import MetaSettingsModal from './components/MetaSettingsModal';
 import AuthModal from './components/AuthModal';
+import SuperAdminDashboard from './components/SuperAdminDashboard';
 import { subscribeToContacts, subscribeToMessages, markContactAsRead } from './firebase/storeService';
 
 class ErrorBoundary extends React.Component {
@@ -53,6 +54,11 @@ function MainApp() {
   const [selectedContact, setSelectedContact] = useState(null);
   const [messages, setMessages] = useState([]);
   
+  // Routing state
+  const [currentRoute, setCurrentRoute] = useState(
+    window.location.pathname === '/super-admin' ? 'super-admin' : 'inbox'
+  );
+
   // UI states
   const [activeTab, setActiveTab] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
@@ -62,9 +68,28 @@ function MainApp() {
 
   const tenantId = currentUser?.tenantId || 'usca_academy';
 
+  // Handle browser URL navigation sync
+  useEffect(() => {
+    const handlePopState = () => {
+      if (window.location.pathname === '/super-admin') {
+        setCurrentRoute('super-admin');
+      } else {
+        setCurrentRoute('inbox');
+      }
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
+  const navigateTo = (routePath) => {
+    const url = routePath === 'super-admin' ? '/super-admin' : '/';
+    window.history.pushState({}, '', url);
+    setCurrentRoute(routePath);
+  };
+
   // Subscribe to real-time contacts scoped to tenantId
   useEffect(() => {
-    if (!currentUser) return;
+    if (!currentUser || currentRoute !== 'inbox') return;
     const unsubscribe = subscribeToContacts(tenantId, (updatedContacts) => {
       setContacts(updatedContacts);
       
@@ -79,11 +104,11 @@ function MainApp() {
     });
 
     return () => unsubscribe();
-  }, [currentUser, tenantId, selectedContact?.phone]);
+  }, [currentUser, currentRoute, tenantId, selectedContact?.phone]);
 
   // Subscribe to real-time messages for currently selected contact scoped to tenantId
   useEffect(() => {
-    if (!currentUser || !selectedContact?.phone) {
+    if (!currentUser || currentRoute !== 'inbox' || !selectedContact?.phone) {
       setMessages([]);
       return;
     }
@@ -96,11 +121,21 @@ function MainApp() {
     });
 
     return () => unsubscribe();
-  }, [currentUser, tenantId, selectedContact?.phone]);
+  }, [currentUser, currentRoute, tenantId, selectedContact?.phone]);
 
   // Show Auth Modal if not authenticated
   if (!currentUser) {
     return <AuthModal onAuthSuccess={(user) => setCurrentUser(user)} />;
+  }
+
+  // Render Super Admin Dashboard view if route is 'super-admin'
+  if (currentRoute === 'super-admin') {
+    return (
+      <SuperAdminDashboard 
+        currentUser={currentUser} 
+        onNavigateToInbox={() => navigateTo('inbox')} 
+      />
+    );
   }
 
   return (
@@ -119,6 +154,7 @@ function MainApp() {
         setSearchQuery={setSearchQuery}
         onOpenSettings={() => setShowSettingsModal(true)}
         onOpenSimulator={() => setShowSimulatorModal(true)}
+        onNavigateToSuperAdmin={() => navigateTo('super-admin')}
         currentUser={currentUser}
         tenantId={tenantId}
       />

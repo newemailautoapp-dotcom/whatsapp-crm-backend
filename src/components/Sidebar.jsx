@@ -9,7 +9,8 @@ import {
   AlertCircle,
   UserCheck,
   Zap,
-  Settings
+  Settings,
+  ShieldCheck
 } from 'lucide-react';
 import { format, isToday, isYesterday } from 'date-fns';
 
@@ -23,9 +24,12 @@ export default function Sidebar({
   setSearchQuery,
   onOpenSettings,
   onOpenSimulator,
+  onNavigateToSuperAdmin,
   currentUser,
   tenantId = 'usca_academy'
 }) {
+  const isSuperAdmin = currentUser?.email === 'sciencehasara@gmail.com';
+
   const formatTime = (ts) => {
     if (!ts) return '';
     try {
@@ -100,6 +104,15 @@ export default function Sidebar({
 
         {/* Action Buttons */}
         <div className="flex items-center gap-1">
+          {isSuperAdmin && (
+            <button 
+              onClick={onNavigateToSuperAdmin}
+              title="Super Admin Tenant Dashboard"
+              className="p-2 text-[#00a884] hover:bg-[#2a3942] rounded-full transition-colors"
+            >
+              <ShieldCheck className="w-5 h-5 text-[#00a884]" />
+            </button>
+          )}
           <button 
             onClick={onOpenSimulator}
             title="Open Webhook & Event Simulator"
