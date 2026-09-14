@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { UserCheck, Key, Mail, Shield, Sparkles, ArrowRight } from 'lucide-react';
 import { signInWithEmailAndPassword, createUserWithEmailAndPassword } from 'firebase/auth';
 import { auth } from '../firebase/config';
+import { ensureUserTenant } from '../firebase/storeService';
 
 export default function AuthModal({ onAuthSuccess }) {
   const [email, setEmail] = useState('');
@@ -23,11 +24,13 @@ export default function AuthModal({ onAuthSuccess }) {
       } else {
         userCredential = await signInWithEmailAndPassword(auth, email, password);
       }
-      onAuthSuccess({
+      const rawUser = {
         uid: userCredential.user.uid,
         email: userCredential.user.email,
         name: email.split('@')[0]
-      });
+      };
+      const userWithTenant = await ensureUserTenant(rawUser);
+      onAuthSuccess(userWithTenant);
     } catch (err) {
       console.warn('Firebase Auth error, falling back to Demo login option:', err);
       setError(err.message);
@@ -36,13 +39,20 @@ export default function AuthModal({ onAuthSuccess }) {
     }
   };
 
-  const handleDemoBypass = () => {
-    onAuthSuccess({
-      uid: 'demo_agent_101',
-      email: 'agent.lead@whatsappcrm.com',
-      name: 'Agent Support (Demo)',
-      avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80'
-    });
+  const handleDemoBypass = async () => {
+    setLoading(true);
+    try {
+      const demoUser = {
+        uid: 'demo_agent_101',
+        email: 'agent.lead@whatsappcrm.com',
+        name: 'Agent Support (Demo)',
+        avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80'
+      };
+      const userWithTenant = await ensureUserTenant(demoUser);
+      onAuthSuccess(userWithTenant);
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (

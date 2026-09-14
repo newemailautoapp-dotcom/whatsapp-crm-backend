@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 import { updateContact, toggle24hWindow, simulateInboundMessage } from '../firebase/storeService';
 
-export default function ContactDetails({ contact, onClose }) {
+export default function ContactDetails({ contact, tenantId = 'usca_academy', onClose }) {
   const [newTag, setNewTag] = useState('');
   const [notes, setNotes] = useState(contact?.notes || '');
   const [isSavingNotes, setIsSavingNotes] = useState(false);
@@ -34,21 +34,21 @@ export default function ContactDetails({ contact, onClose }) {
     const currentTags = contact.tags || [];
     if (!currentTags.includes(tagToAdd)) {
       const updatedTags = [...currentTags, tagToAdd];
-      updateContact(contact.phone, { tags: updatedTags });
+      updateContact(tenantId, contact.phone, { tags: updatedTags });
     }
     setNewTag('');
   };
 
   const handleRemoveTag = (tagToRemove) => {
     const updatedTags = (contact.tags || []).filter(t => t !== tagToRemove);
-    updateContact(contact.phone, { tags: updatedTags });
+    updateContact(tenantId, contact.phone, { tags: updatedTags });
   };
 
   const handleNotesChange = (e) => {
     const val = e.target.value;
     setNotes(val);
     setIsSavingNotes(true);
-    updateContact(contact.phone, { notes: val });
+    updateContact(tenantId, contact.phone, { notes: val });
     setTimeout(() => setIsSavingNotes(false), 600);
   };
 

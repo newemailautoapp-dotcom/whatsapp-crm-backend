@@ -3,7 +3,7 @@ import { Settings, ShieldCheck, Key, Phone, Database, Check, Copy, ExternalLink,
 import { getStoredConfig, saveMetaConfig } from '../firebase/storeService';
 import { BACKEND_URL } from '../firebase/config';
 
-export default function MetaSettingsModal({ onClose }) {
+export default function MetaSettingsModal({ tenantId = 'usca_academy', onClose }) {
   const [config, setConfig] = useState({
     phoneNumberId: '',
     wabaId: '',
@@ -14,12 +14,16 @@ export default function MetaSettingsModal({ onClose }) {
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
-    setConfig(getStoredConfig());
-  }, []);
+    async function loadConfig() {
+      const cfg = await getStoredConfig(tenantId);
+      setConfig(cfg || {});
+    }
+    loadConfig();
+  }, [tenantId]);
 
   const handleSave = (e) => {
     e.preventDefault();
-    saveMetaConfig(config);
+    saveMetaConfig(tenantId, config);
     setIsSaved(true);
     setTimeout(() => setIsSaved(false), 2000);
   };
@@ -39,7 +43,12 @@ export default function MetaSettingsModal({ onClose }) {
         <div className="px-5 py-4 bg-[#111b21] border-b border-[#222d34] flex items-center justify-between">
           <div className="flex items-center gap-2 text-[#00a884]">
             <Settings className="w-5 h-5" />
-            <h3 className="font-bold text-[#e9edef] text-sm">Meta Cloud API & Webhook Settings</h3>
+            <div>
+              <h3 className="font-bold text-[#e9edef] text-sm">Meta Cloud API & Webhook Settings</h3>
+              <span className="text-[10px] text-[#00a884] bg-[#00a884]/10 border border-[#00a884]/30 px-2 py-0.5 rounded font-mono">
+                Tenant: {tenantId}
+              </span>
+            </div>
           </div>
           <button onClick={onClose} className="text-[#8696a0] hover:text-[#e9edef]">
             <X className="w-5 h-5" />

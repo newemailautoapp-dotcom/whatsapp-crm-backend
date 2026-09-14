@@ -115,35 +115,77 @@ Direct WhatsApp link: https://wa.me/${cleanPhone}`;
 
 // Root health check endpoint for Render / Uptime monitors
 app.get('/', (req, res) => {
-  res.send('WhatsApp CRM Webhook Server is running!');
+  res.send('WhatsApp CRM Multi-Tenant SaaS Webhook Server is running!');
 });
 
-// Helper function to dispatch outbound WhatsApp messages via Meta Graph API & store in Firestore
-async function dispatchOutboundWhatsAppMessage({ phone, body, type = 'text', templateName = null, templateComponents = [] }) {
-  let phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID || process.env.PHONE_NUMBER_ID || process.env.META_PHONE_NUMBER_ID;
-  let accessToken = process.env.WHATSAPP_ACCESS_TOKEN || process.env.WHATSAPP_TOKEN || process.env.META_ACCESS_TOKEN;
+// Multi-Tenant Helper: Lookup Tenant Config by Tenant ID (Default: usca_academy)
+async function getTenantConfig(tenantId = 'usca_academy') {
+  try {
+    const tenantSnap = await db.doc(`tenants/${tenantId}`).get();
+    if (tenantSnap.exists) {
+      const data = tenantSnap.data();
+      return {
+        tenantId: tenantSnap.id,
+        name: data.name || 'USCA Academy',
+        phoneNumberId: data.phoneNumberId || process.env.WHATSAPP_PHONE_NUMBER_ID || process.env.PHONE_NUMBER_ID,
+        wabaId: data.wabaId || process.env.WABA_ID,
+        permanentToken: data.permanentToken || data.accessToken || process.env.WHATSAPP_ACCESS_TOKEN || process.env.WHATSAPP_TOKEN,
+        verifyToken: data.verifyToken || process.env.VERIFY_TOKEN || 'my_secure_token_123'
+      };
+    }
+  } catch (err) {
+    console.warn(`Could not read tenant config for ${tenantId}:`, err.message);
+  }
 
-  // Only fallback to Firestore settings/metaConfig if credentials are missing in process.env
-  if (!phoneNumberId || !accessToken) {
+  // Default Tenant Fallback (usca_academy) reading env vars
+  return {
+    tenantId: 'usca_academy',
+    name: 'USCA Academy',
+    phoneNumberId: process.env.WHATSAPP_PHONE_NUMBER_ID || process.env.PHONE_NUMBER_ID || process.env.META_PHONE_NUMBER_ID,
+    wabaId: process.env.WABA_ID || process.env.META_WABA_ID,
+    permanentToken: process.env.WHATSAPP_ACCESS_TOKEN || process.env.WHATSAPP_TOKEN || process.env.META_ACCESS_TOKEN,
+    verifyToken: process.env.WEBHOOK_VERIFY_TOKEN || process.env.VERIFY_TOKEN || 'my_secure_token_123'
+  };
+}
+
+// Multi-Tenant Helper: Find Tenant by Meta Phone Number ID
+async function findTenantByPhoneNumberId(incomingPhoneId) {
+  if (incomingPhoneId) {
     try {
-      const configSnap = await db.doc('settings/metaConfig').get();
-      if (configSnap.exists) {
-        const configData = configSnap.data();
-        if (!phoneNumberId && configData.phoneNumberId) phoneNumberId = configData.phoneNumberId;
-        if (!accessToken && configData.accessToken && !configData.accessToken.includes('demo')) {
-          accessToken = configData.accessToken;
-        }
+      const querySnap = await db.collection('tenants').where('phoneNumberId', '==', String(incomingPhoneId)).limit(1).get();
+      if (!querySnap.empty) {
+        const docSnap = querySnap.docs[0];
+        const data = docSnap.data();
+        return {
+          tenantId: docSnap.id,
+          name: data.name || 'Tenant ' + docSnap.id,
+          phoneNumberId: data.phoneNumberId,
+          wabaId: data.wabaId,
+          permanentToken: data.permanentToken || data.accessToken,
+          verifyToken: data.verifyToken
+        };
       }
     } catch (e) {
-      console.warn('Could not read settings/metaConfig from Firestore');
+      console.warn(`Tenant lookup error for PhoneID ${incomingPhoneId}:`, e.message);
     }
   }
+
+  // Fallback to default tenant (usca_academy)
+  return getTenantConfig('usca_academy');
+}
+
+// Helper function to dispatch outbound WhatsApp messages via Meta Graph API & store in Firestore
+async function dispatchOutboundWhatsAppMessage({ tenantId = 'usca_academy', phone, body, type = 'text', templateName = null, templateComponents = [] }) {
+  const tenantConfig = await getTenantConfig(tenantId);
+  const phoneNumberId = tenantConfig.phoneNumberId;
+  const accessToken = tenantConfig.permanentToken;
+  const activeTenantId = tenantConfig.tenantId;
 
   const nowMs = Date.now();
   let metaMsgId = `wamid_out_${nowMs}_${Math.random().toString(36).substr(2, 4)}`;
 
   if (phoneNumberId && accessToken) {
-    console.log(`Dispatching Meta WhatsApp msg to ${phone} using PhoneID: ${phoneNumberId}, Token: ${accessToken.substring(0, 12)}...`);
+    console.log(`[TENANT: ${activeTenantId}] Dispatching Meta WhatsApp msg to ${phone} using PhoneID: ${phoneNumberId}, Token: ${accessToken.substring(0, 12)}...`);
     try {
       let metaPayload = {
         messaging_product: 'whatsapp',
@@ -180,12 +222,10 @@ async function dispatchOutboundWhatsAppMessage({ phone, body, type = 'text', tem
       console.error('Error sending WhatsApp message via Meta Graph API:', err.response?.data || err.message);
     }
   } else {
-    console.warn('Meta credentials (phoneNumberId / accessToken) not found. Saving outbound message in Firestore only.');
+    console.warn(`[TENANT: ${activeTenantId}] Meta credentials (phoneNumberId / accessToken) not found. Saving outbound message in Firestore only.`);
   }
 
-  // Store outbound message in Firestore chats/{phone}/messages/{metaMsgId}
-  const messageRef = db.collection('chats').doc(phone).collection('messages').doc(metaMsgId);
-  await messageRef.set({
+  const msgObj = {
     id: metaMsgId,
     from: 'business',
     to: phone,
@@ -194,10 +234,25 @@ async function dispatchOutboundWhatsAppMessage({ phone, body, type = 'text', tem
     templateName: templateName,
     status: 'sent',
     timestamp: admin.firestore.Timestamp.fromMillis(nowMs),
-    direction: 'outbound'
-  });
+    direction: 'outbound',
+    tenantId: activeTenantId
+  };
 
-  // Update contact document lastMessage and lastMessageTimestamp
+  // 1. Store outbound message in Tenant Subcollection: tenants/{tenantId}/contacts/{phone}/messages/{metaMsgId}
+  const tenantMsgRef = db.collection('tenants').doc(activeTenantId).collection('contacts').doc(phone).collection('messages').doc(metaMsgId);
+  await tenantMsgRef.set(msgObj, { merge: true }).catch(() => {});
+
+  // Update contact document in tenant collection
+  const tenantContactRef = db.collection('tenants').doc(activeTenantId).collection('contacts').doc(phone);
+  await tenantContactRef.set({
+    lastMessage: type === 'template' ? `[Template] ${templateName}` : body,
+    lastMessageTimestamp: admin.firestore.Timestamp.fromMillis(nowMs),
+    tenantId: activeTenantId
+  }, { merge: true }).catch(() => {});
+
+  // 2. Legacy root collection fallback
+  const messageRef = db.collection('chats').doc(phone).collection('messages').doc(metaMsgId);
+  await messageRef.set(msgObj, { merge: true }).catch(() => {});
   const contactRef = db.collection('contacts').doc(phone);
   await contactRef.set({
     lastMessage: type === 'template' ? `[Template] ${templateName}` : body,
@@ -210,19 +265,30 @@ async function dispatchOutboundWhatsAppMessage({ phone, body, type = 'text', tem
 // ----------------------------------------------------------------------
 // 1. GET /webhook (Meta Webhook Challenge Verification)
 // ----------------------------------------------------------------------
-app.get('/webhook', (req, res) => {
+app.get('/webhook', async (req, res) => {
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
   const challenge = req.query['hub.challenge'];
 
   const expectedToken = process.env.WEBHOOK_VERIFY_TOKEN || process.env.VERIFY_TOKEN || 'my_secure_token_123';
 
-  if (mode === 'subscribe' && token === expectedToken) {
-    console.log('WEBHOOK_VERIFIED successfully!');
-    return res.status(200).send(challenge);
+  if (mode === 'subscribe') {
+    if (token === expectedToken) {
+      console.log('WEBHOOK_VERIFIED with default verify_token!');
+      return res.status(200).send(challenge);
+    }
+
+    // Support per-tenant verification token lookup
+    try {
+      const tenantSnap = await db.collection('tenants').where('verifyToken', '==', token).limit(1).get();
+      if (!tenantSnap.empty) {
+        console.log(`WEBHOOK_VERIFIED with custom tenant verify_token for tenant: ${tenantSnap.docs[0].id}`);
+        return res.status(200).send(challenge);
+      }
+    } catch (e) {}
   }
   
-  console.log('Webhook verification failed. Expected:', expectedToken, 'Received:', token);
+  console.log('Webhook verification failed. Received token:', token);
   return res.sendStatus(403);
 });
 
@@ -247,6 +313,11 @@ app.post('/webhook', async (req, res) => {
           const value = change.value;
           if (!value) continue;
 
+          // Extract Meta Phone Number ID from metadata
+          const incomingPhoneId = value.metadata?.phone_number_id;
+          const tenantData = await findTenantByPhoneNumberId(incomingPhoneId);
+          const activeTenantId = tenantData.tenantId;
+
           // A) Process Inbound Messages (User clicks & text replies ONLY)
           if (value.messages && value.messages.length > 0) {
             for (const message of value.messages) {
@@ -268,7 +339,7 @@ app.post('/webhook', async (req, res) => {
               const rawPhone = message.from; // Sender WhatsApp phone
               const cleanPhone = (rawPhone || '').replace(/^\+/, '');
               const mitchellPhone = (process.env.MITCHELL_PHONE || '971585687075').replace(/^\+/, '');
-              const businessPhone = (process.env.WHATSAPP_PHONE_NUMBER_ID || process.env.PHONE_NUMBER_ID || '1293265723876318').replace(/^\+/, '');
+              const businessPhone = (tenantData.phoneNumberId || process.env.WHATSAPP_PHONE_NUMBER_ID || '1293265723876318').replace(/^\+/, '');
 
               // 2. SENDER GUARD: Completely ignore events originating from Mitchell's number or Business Sender ID
               if (cleanPhone === mitchellPhone || cleanPhone === '971585687075' || cleanPhone === businessPhone || cleanPhone.includes('1293265723876318')) {
@@ -300,39 +371,35 @@ app.post('/webhook', async (req, res) => {
                 msgBody = `[${msgType.toUpperCase()} Message Received]`;
               }
 
-              // Auto-upsert Contact document into Firestore contacts/{phone}
-              const contactRef = db.collection('contacts').doc(cleanPhone);
-              const contactSnap = await contactRef.get();
+              // Auto-upsert Contact document into Tenant collection: tenants/{tenantId}/contacts/{cleanPhone}
+              const tenantContactRef = db.collection('tenants').doc(activeTenantId).collection('contacts').doc(cleanPhone);
+              const contactSnap = await tenantContactRef.get();
               const windowExpiry = timestamp + (24 * 60 * 60 * 1000); // 24 Hours from now
 
+              const contactObj = {
+                name: profileName,
+                phone: cleanPhone,
+                lastMessage: msgBody,
+                lastMessageTimestamp: admin.firestore.Timestamp.fromMillis(timestamp),
+                is24hActive: true,
+                windowExpiry: windowExpiry,
+                tenantId: activeTenantId
+              };
+
               if (!contactSnap.exists) {
-                await contactRef.set({
-                  name: profileName,
-                  phone: cleanPhone,
-                  lastMessage: msgBody,
-                  lastMessageTimestamp: admin.firestore.Timestamp.fromMillis(timestamp),
-                  unreadCount: 1,
-                  is24hActive: true,
-                  windowExpiry: windowExpiry,
-                  tags: ['New Lead', 'Inbound'],
-                  optedOut: false,
-                  notes: 'Auto-registered via inbound WhatsApp webhook.'
-                });
+                contactObj.unreadCount = 1;
+                contactObj.tags = ['New Lead', 'Inbound'];
+                contactObj.optedOut = false;
+                contactObj.notes = 'Auto-registered via inbound WhatsApp webhook.';
+                await tenantContactRef.set(contactObj);
               } else {
-                const currentUnread = contactSnap.data().unreadCount || 0;
-                await contactRef.update({
-                  name: profileName,
-                  lastMessage: msgBody,
-                  lastMessageTimestamp: admin.firestore.Timestamp.fromMillis(timestamp),
-                  unreadCount: currentUnread + 1,
-                  is24hActive: true,
-                  windowExpiry: windowExpiry
-                });
+                contactObj.unreadCount = (contactSnap.data().unreadCount || 0) + 1;
+                await tenantContactRef.update(contactObj);
               }
 
-              // Save Message document into Firestore chats/{phone}/messages/{messageId}
-              const messageRef = db.collection('chats').doc(cleanPhone).collection('messages').doc(messageId);
-              await messageRef.set({
+              // Save Message document into Tenant collection: tenants/{tenantId}/contacts/{cleanPhone}/messages/{messageId}
+              const tenantMessageRef = db.collection('tenants').doc(activeTenantId).collection('contacts').doc(cleanPhone).collection('messages').doc(messageId);
+              const messageObj = {
                 id: messageId,
                 from: cleanPhone,
                 to: 'business',
@@ -341,10 +408,18 @@ app.post('/webhook', async (req, res) => {
                 buttonPayload: buttonPayload,
                 status: 'read',
                 timestamp: admin.firestore.Timestamp.fromMillis(timestamp),
-                direction: 'inbound'
-              });
+                direction: 'inbound',
+                tenantId: activeTenantId
+              };
+              await tenantMessageRef.set(messageObj);
 
-              console.log(`Inbound message saved for ${cleanPhone} (${profileName}): ${msgBody}`);
+              // Also write to legacy root paths for backward compatibility
+              const legacyContactRef = db.collection('contacts').doc(cleanPhone);
+              await legacyContactRef.set(contactObj, { merge: true }).catch(() => {});
+              const legacyMessageRef = db.collection('chats').doc(cleanPhone).collection('messages').doc(messageId);
+              await legacyMessageRef.set(messageObj, { merge: true }).catch(() => {});
+
+              console.log(`[TENANT: ${activeTenantId}] Inbound message saved for ${cleanPhone} (${profileName}): ${msgBody}`);
 
               // Automated Trigger Check for "get investment details" (case-insensitive)
               const incomingText = `${msgBody || ''} ${buttonPayload || ''}`.toLowerCase();
@@ -353,6 +428,7 @@ app.post('/webhook', async (req, res) => {
                 const autoReplyText = `Thanks for your interest in Yas Island! 🌴\n\nWe’ve received your response — one of our specialists will contact you shortly with full investment details.\n\nTo help us tailor the best options, feel free to share your budget, and preferred unit type below 🤝`;
 
                 await dispatchOutboundWhatsAppMessage({
+                  tenantId: activeTenantId,
                   phone: cleanPhone,
                   body: autoReplyText,
                   type: 'text'
@@ -365,16 +441,18 @@ app.post('/webhook', async (req, res) => {
 
                 const seiSaadiyatAutoReply = `Thank you for your interest in Sei Saadiyat. \n\nYour pre-registration has been successfully received. \n\nOur Co-Founder, Mitchell, will be handling your inquiry directly. You can also connect with him immediately via WhatsApp or call for priority allocations, floor plans, and pricing details:\n\n📱 Direct Line: +971 58 568 7075\n\nWe look forward to assisting you.`;
 
-                const mitchellLeadNotification = `🚨 *New Lead Captured!*\nName: ${profileName || 'Valued Lead'}\nPhone: +${cleanPhone}\nWhatsApp Link: https://wa.me/${cleanPhone}`;
+                const mitchellLeadNotification = `🚨 *New Lead Captured!*\nTenant: ${tenantData.name}\nName: ${profileName || 'Valued Lead'}\nPhone: +${cleanPhone}\nWhatsApp Link: https://wa.me/${cleanPhone}`;
 
                 // Fire outbound responses concurrently
                 await Promise.all([
                   dispatchOutboundWhatsAppMessage({
+                    tenantId: activeTenantId,
                     phone: cleanPhone,
                     body: seiSaadiyatAutoReply,
                     type: 'text'
                   }),
                   dispatchOutboundWhatsAppMessage({
+                    tenantId: activeTenantId,
                     phone: mitchellPhone,
                     body: mitchellLeadNotification,
                     type: 'text'
@@ -412,11 +490,11 @@ app.post('/webhook', async (req, res) => {
 
               if (recipientPhone && statusMessageId) {
                 try {
-                  const contactRef = db.collection('contacts').doc(recipientPhone);
-                  const contactSnap = await contactRef.get();
+                  const tenantContactRef = db.collection('tenants').doc(activeTenantId).collection('contacts').doc(recipientPhone);
+                  const contactSnap = await tenantContactRef.get();
 
                   if (!contactSnap.exists) {
-                    await contactRef.set({
+                    await tenantContactRef.set({
                       name: `Lead +${recipientPhone}`,
                       phone: recipientPhone,
                       leadClass: 'Inbound',
@@ -429,25 +507,26 @@ app.post('/webhook', async (req, res) => {
                       windowExpiry: 0,
                       tags: ['Broadcast Lead', 'External Outreach'],
                       optedOut: false,
-                      notes: 'Auto-registered via outbound template status webhook.'
+                      notes: 'Auto-registered via outbound template status webhook.',
+                      tenantId: activeTenantId
                     }, { merge: true });
                   } else {
-                    await contactRef.set({
+                    await tenantContactRef.set({
                       lastMessage: contactSnap.data()?.lastMessage || 'Template Sent',
                       lastMessageTimestamp: statusTime
                     }, { merge: true });
                   }
 
-                  const msgRef = db.collection('chats').doc(recipientPhone).collection('messages').doc(statusMessageId);
-                  const msgSnap = await msgRef.get();
+                  const tenantMsgRef = db.collection('tenants').doc(activeTenantId).collection('contacts').doc(recipientPhone).collection('messages').doc(statusMessageId);
+                  const msgSnap = await tenantMsgRef.get();
 
                   if (msgSnap.exists) {
-                    await msgRef.update({
+                    await tenantMsgRef.update({
                       status: newStatus,
                       statusTimestamp: nowTimestamp
                     });
                   } else {
-                    await msgRef.set({
+                    await tenantMsgRef.set({
                       id: statusMessageId,
                       from: 'business',
                       to: recipientPhone,
@@ -457,9 +536,14 @@ app.post('/webhook', async (req, res) => {
                       status: newStatus,
                       timestamp: statusTime,
                       direction: 'outbound',
-                      statusTimestamp: nowTimestamp
+                      statusTimestamp: nowTimestamp,
+                      tenantId: activeTenantId
                     });
                   }
+
+                  // Legacy fallback status update
+                  const legacyMsgRef = db.collection('chats').doc(recipientPhone).collection('messages').doc(statusMessageId);
+                  await legacyMsgRef.set({ status: newStatus, statusTimestamp: nowTimestamp }, { merge: true }).catch(() => {});
                 } catch (err) {
                   console.warn(`Error updating status for ${statusMessageId}:`, err.message);
                 }
@@ -477,10 +561,50 @@ app.post('/webhook', async (req, res) => {
 });
 
 // ----------------------------------------------------------------------
-// 3. POST /api/send-message (Outbound Messaging Engine via Meta Graph API)
+// 3. GET /api/tenant/:tenantId (Fetch Tenant Configuration)
+// ----------------------------------------------------------------------
+app.get('/api/tenant/:tenantId', async (req, res) => {
+  const { tenantId } = req.params;
+  const config = await getTenantConfig(tenantId);
+  return res.status(200).json(config);
+});
+
+// ----------------------------------------------------------------------
+// 4. POST /api/tenant-config (Save Tenant Meta Credentials)
+// ----------------------------------------------------------------------
+app.post('/api/tenant-config', async (req, res) => {
+  const { tenantId = 'usca_academy', name, phoneNumberId, wabaId, permanentToken, verifyToken } = req.body;
+
+  if (!tenantId) {
+    return res.status(400).json({ error: 'Missing tenantId' });
+  }
+
+  try {
+    const tenantRef = db.collection('tenants').doc(tenantId);
+    const updateData = {
+      tenantId,
+      updatedAt: admin.firestore.Timestamp.now()
+    };
+    if (name) updateData.name = name;
+    if (phoneNumberId) updateData.phoneNumberId = phoneNumberId;
+    if (wabaId) updateData.wabaId = wabaId;
+    if (permanentToken) updateData.permanentToken = permanentToken;
+    if (verifyToken) updateData.verifyToken = verifyToken;
+
+    await tenantRef.set(updateData, { merge: true });
+    console.log(`Updated configuration for tenant ${tenantId}`);
+    return res.status(200).json({ success: true, tenantId });
+  } catch (err) {
+    console.error('Tenant config update error:', err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// ----------------------------------------------------------------------
+// 5. POST /api/send-message (Outbound Messaging Engine via Meta Graph API)
 // ----------------------------------------------------------------------
 app.post('/api/send-message', async (req, res) => {
-  const { phone, body, type = 'text', templateName = null, templateComponents = [] } = req.body;
+  const { tenantId = 'usca_academy', phone, body, type = 'text', templateName = null, templateComponents = [] } = req.body;
 
   if (!phone) {
     return res.status(400).json({ error: 'Missing recipient phone number' });
@@ -488,6 +612,7 @@ app.post('/api/send-message', async (req, res) => {
 
   try {
     const metaMsgId = await dispatchOutboundWhatsAppMessage({
+      tenantId,
       phone,
       body,
       type,

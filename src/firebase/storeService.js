@@ -13,6 +13,8 @@ import {
 } from 'firebase/firestore';
 import { INITIAL_CONTACTS, INITIAL_MESSAGES } from '../data/mockContacts';
 
+export const DEFAULT_TENANT_ID = 'usca_academy';
+
 // Store state in localStorage for persistence during demo
 const STORAGE_KEY_CONTACTS = 'wa_crm_contacts_v1';
 const STORAGE_KEY_MESSAGES = 'wa_crm_messages_v1';
@@ -60,8 +62,22 @@ const DEFAULT_META_CONFIG = {
   verifyToken: import.meta.env.VITE_META_VERIFY_TOKEN || 'my_secure_token_123'
 };
 
-export function getStoredConfig() {
-  const data = localStorage.getItem(STORAGE_KEY_CONFIG);
+export async function getStoredConfig(tenantId = DEFAULT_TENANT_ID) {
+  if (typeof tenantId === 'object') tenantId = DEFAULT_TENANT_ID;
+  tenantId = tenantId || DEFAULT_TENANT_ID;
+
+  if (isLiveFirebase) {
+    try {
+      const snap = await getDoc(doc(db, 'tenants', tenantId));
+      if (snap.exists()) {
+        return snap.data();
+      }
+    } catch (e) {
+      console.warn('Error fetching tenant config from Firestore:', e);
+    }
+  }
+
+  const data = localStorage.getItem(`${STORAGE_KEY_CONFIG}_${tenantId}`);
   if (data) {
     try { return JSON.parse(data); } catch (e) {}
   }
@@ -69,24 +85,92 @@ export function getStoredConfig() {
 }
 
 // ----------------------------------------------------
-// Realtime Contacts Subscription
+// User Tenant Mapping & Provisioning Helper
 // ----------------------------------------------------
-export function subscribeToContacts(callback) {
+export async function ensureUserTenant(authUser) {
+  if (!authUser || !authUser.uid) return { ...authUser, tenantId: DEFAULT_TENANT_ID };
+
   if (isLiveFirebase) {
-    const q = query(collection(db, 'contacts'), orderBy('lastMessageTimestamp', 'desc'));
+    try {
+      const userRef = doc(db, 'users', authUser.uid);
+      const userSnap = await getDoc(userRef);
+
+      if (userSnap.exists() && userSnap.data()?.tenantId) {
+        return {
+          ...authUser,
+          tenantId: userSnap.data().tenantId,
+          name: userSnap.data().name || authUser.name || authUser.email?.split('@')[0] || 'Agent'
+        };
+      }
+
+      // Auto-provision default tenant 'usca_academy'
+      const assignedTenantId = DEFAULT_TENANT_ID;
+      await setDoc(userRef, {
+        uid: authUser.uid,
+        email: authUser.email || '',
+        name: authUser.name || authUser.email?.split('@')[0] || 'Agent',
+        tenantId: assignedTenantId,
+        createdAt: serverTimestamp()
+      }, { merge: true });
+
+      // Ensure tenant document exists
+      const tenantRef = doc(db, 'tenants', assignedTenantId);
+      const tenantSnap = await getDoc(tenantRef);
+      if (!tenantSnap.exists()) {
+        await setDoc(tenantRef, {
+          tenantId: assignedTenantId,
+          name: 'USCA Academy',
+          phoneNumberId: import.meta.env.VITE_META_PHONE_NUMBER_ID || '109823471092834',
+          wabaId: import.meta.env.VITE_META_WABA_ID || '992837410293847',
+          permanentToken: import.meta.env.VITE_META_ACCESS_TOKEN || '',
+          verifyToken: import.meta.env.VITE_META_VERIFY_TOKEN || 'my_secure_token_123',
+          createdAt: serverTimestamp()
+        });
+      }
+
+      return {
+        ...authUser,
+        tenantId: assignedTenantId
+      };
+    } catch (err) {
+      console.warn('Error in ensureUserTenant:', err);
+    }
+  }
+
+  return {
+    ...authUser,
+    tenantId: DEFAULT_TENANT_ID
+  };
+}
+
+// ----------------------------------------------------
+// Realtime Contacts Subscription (Multi-Tenant)
+// ----------------------------------------------------
+export function subscribeToContacts(tenantId, callback) {
+  if (typeof tenantId === 'function') {
+    callback = tenantId;
+    tenantId = DEFAULT_TENANT_ID;
+  }
+  tenantId = tenantId || DEFAULT_TENANT_ID;
+
+  if (isLiveFirebase) {
+    const q = query(collection(db, 'tenants', tenantId, 'contacts'), orderBy('lastMessageTimestamp', 'desc'));
     return onSnapshot(q, (snapshot) => {
       const contacts = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       callback(contacts);
     }, (err) => {
-      console.warn('Firestore subscription fallback to local store:', err);
-      callback(getStoredContacts());
+      console.warn('Firestore tenant contacts subscription fallback to local store:', err);
+      // Fallback to legacy root collection if tenant subcollection empty/error
+      const legacyQ = query(collection(db, 'contacts'), orderBy('lastMessageTimestamp', 'desc'));
+      return onSnapshot(legacyQ, (snap) => {
+        callback(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+      }, () => callback(getStoredContacts()));
     });
   }
 
   // Demo Local Storage mode
   const handler = () => callback(getStoredContacts());
   eventHub.addEventListener('contacts_updated', handler);
-  // Initial call
   callback(getStoredContacts());
 
   return () => {
@@ -95,20 +179,32 @@ export function subscribeToContacts(callback) {
 }
 
 // ----------------------------------------------------
-// Realtime Messages Subscription for a specific phone
+// Realtime Messages Subscription for a specific phone (Multi-Tenant)
 // ----------------------------------------------------
-export function subscribeToMessages(phone, callback) {
+export function subscribeToMessages(tenantId, phone, callback) {
+  if (typeof phone === 'function') {
+    callback = phone;
+    phone = tenantId;
+    tenantId = DEFAULT_TENANT_ID;
+  }
+  tenantId = tenantId || DEFAULT_TENANT_ID;
+
   if (!phone) return () => {};
 
   if (isLiveFirebase) {
-    const q = query(collection(db, 'chats', phone, 'messages'), orderBy('timestamp', 'asc'));
+    const q = query(collection(db, 'tenants', tenantId, 'contacts', phone, 'messages'), orderBy('timestamp', 'asc'));
     return onSnapshot(q, (snapshot) => {
       const msgs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       callback(msgs);
     }, (err) => {
-      console.warn('Firestore messages fallback:', err);
-      const allMsgs = getStoredMessages();
-      callback(allMsgs[phone] || []);
+      console.warn('Firestore tenant messages fallback to legacy root chats:', err);
+      const legacyQ = query(collection(db, 'chats', phone, 'messages'), orderBy('timestamp', 'asc'));
+      return onSnapshot(legacyQ, (snap) => {
+        callback(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+      }, () => {
+        const allMsgs = getStoredMessages();
+        callback(allMsgs[phone] || []);
+      });
     });
   }
 
@@ -126,14 +222,15 @@ export function subscribeToMessages(phone, callback) {
 }
 
 // ----------------------------------------------------
-// Send Outbound Message (Direct or Template)
+// Send Outbound Message (Direct or Template, Multi-Tenant)
 // ----------------------------------------------------
-export async function sendOutboundMessage({ phone, body, type = 'text', templateName = null }) {
+export async function sendOutboundMessage({ tenantId = DEFAULT_TENANT_ID, phone, body, type = 'text', templateName = null }) {
   const timestamp = Date.now();
   const messageId = `msg_out_${timestamp}_${Math.random().toString(36).substr(2, 4)}`;
 
   const newMsg = {
     id: messageId,
+    tenantId,
     from: 'business',
     to: phone,
     type,
@@ -144,12 +241,13 @@ export async function sendOutboundMessage({ phone, body, type = 'text', template
     direction: 'outbound'
   };
 
-  // Dispatch outbound message to Render Backend API (https://whatsapp-crm-backend-enzj.onrender.com/api/send-message)
+  // Dispatch outbound message to Render Backend API with tenantId
   try {
     fetch(`${BACKEND_URL}/api/send-message`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
+        tenantId,
         phone,
         body,
         type,
@@ -166,20 +264,31 @@ export async function sendOutboundMessage({ phone, body, type = 'text', template
 
   if (isLiveFirebase) {
     try {
-      // 1. Save to subcollection chats/{phone}/messages
-      const msgRef = doc(db, 'chats', phone, 'messages', messageId);
-      await setDoc(msgRef, {
+      // 1. Save to tenants/{tenantId}/contacts/{phone}/messages subcollection
+      const tenantMsgRef = doc(db, 'tenants', tenantId, 'contacts', phone, 'messages', messageId);
+      await setDoc(tenantMsgRef, {
         ...newMsg,
         timestamp: serverTimestamp()
       });
 
-      // 2. Update contact summary
-      const contactRef = doc(db, 'contacts', phone);
-      await updateDoc(contactRef, {
+      // Update tenant contact summary
+      const tenantContactRef = doc(db, 'tenants', tenantId, 'contacts', phone);
+      await setDoc(tenantContactRef, {
+        phone,
         lastMessage: type === 'template' ? `[Template] ${templateName}` : body,
         lastMessageTimestamp: serverTimestamp(),
         unreadCount: 0
-      });
+      }, { merge: true });
+
+      // Fallback: Also save to legacy root collection for backwards compatibility
+      const legacyMsgRef = doc(db, 'chats', phone, 'messages', messageId);
+      await setDoc(legacyMsgRef, { ...newMsg, timestamp: serverTimestamp() }).catch(() => {});
+      const legacyContactRef = doc(db, 'contacts', phone);
+      await updateDoc(legacyContactRef, {
+        lastMessage: type === 'template' ? `[Template] ${templateName}` : body,
+        lastMessageTimestamp: serverTimestamp(),
+        unreadCount: 0
+      }).catch(() => {});
     } catch (err) {
       console.error('Error writing to Firestore:', err);
     }
@@ -204,27 +313,28 @@ export async function sendOutboundMessage({ phone, body, type = 'text', template
     saveStoredContacts(contacts);
   }
 
-  // Simulate delivery status sequence: sent -> delivered (1.5s) -> read (3s)
+  // Simulate delivery status sequence: sent -> delivered (1.5s) -> read (3.5s)
   setTimeout(() => {
-    updateMessageStatus(phone, messageId, 'delivered');
+    updateMessageStatus(tenantId, phone, messageId, 'delivered');
   }, 1500);
 
   setTimeout(() => {
-    updateMessageStatus(phone, messageId, 'read');
+    updateMessageStatus(tenantId, phone, messageId, 'read');
   }, 3500);
 
   return newMsg;
 }
 
 // ----------------------------------------------------
-// Simulate Inbound Message (from Customer)
+// Simulate Inbound Message (from Customer, Multi-Tenant)
 // ----------------------------------------------------
-export async function simulateInboundMessage({ phone, name, body, type = 'text', buttonPayload = null }) {
+export async function simulateInboundMessage({ tenantId = DEFAULT_TENANT_ID, phone, name, body, type = 'text', buttonPayload = null }) {
   const timestamp = Date.now();
   const messageId = `msg_in_${timestamp}_${Math.random().toString(36).substr(2, 4)}`;
 
   const newMsg = {
     id: messageId,
+    tenantId,
     from: phone,
     to: 'business',
     type,
@@ -239,7 +349,6 @@ export async function simulateInboundMessage({ phone, name, body, type = 'text',
   let contact = contacts.find(c => c.phone === phone);
 
   if (!contact) {
-    // Auto-upsert new contact
     contact = {
       phone,
       name: name || `Customer ${phone.slice(-4)}`,
@@ -247,14 +356,13 @@ export async function simulateInboundMessage({ phone, name, body, type = 'text',
       lastMessageTimestamp: timestamp,
       unreadCount: 1,
       is24hActive: true,
-      windowExpiry: timestamp + (24 * 60 * 60 * 1000), // 24 hours
+      windowExpiry: timestamp + (24 * 60 * 60 * 1000),
       tags: ['New Lead', 'Inbound'],
       optedOut: false,
       notes: 'Auto-upserted from inbound WhatsApp message.'
     };
     contacts.unshift(contact);
   } else {
-    // Reset/extend 24h window upon inbound customer message
     contact.lastMessage = body;
     contact.lastMessageTimestamp = timestamp;
     contact.unreadCount = (contact.unreadCount || 0) + 1;
@@ -270,10 +378,10 @@ export async function simulateInboundMessage({ phone, name, body, type = 'text',
 
   if (isLiveFirebase) {
     try {
-      const msgRef = doc(db, 'chats', phone, 'messages', messageId);
+      const msgRef = doc(db, 'tenants', tenantId, 'contacts', phone, 'messages', messageId);
       await setDoc(msgRef, { ...newMsg, timestamp: serverTimestamp() });
 
-      const contactRef = doc(db, 'contacts', phone);
+      const contactRef = doc(db, 'tenants', tenantId, 'contacts', phone);
       await setDoc(contactRef, {
         name: contact.name,
         phone: contact.phone,
@@ -295,7 +403,15 @@ export async function simulateInboundMessage({ phone, name, body, type = 'text',
 // ----------------------------------------------------
 // Update Message Status (sent, delivered, read, failed)
 // ----------------------------------------------------
-export function updateMessageStatus(phone, messageId, newStatus) {
+export function updateMessageStatus(tenantId = DEFAULT_TENANT_ID, phone, messageId, newStatus) {
+  if (arguments.length === 3) {
+    newStatus = messageId;
+    messageId = phone;
+    phone = tenantId;
+    tenantId = DEFAULT_TENANT_ID;
+  }
+  tenantId = tenantId || DEFAULT_TENANT_ID;
+
   const allMsgs = getStoredMessages();
   if (allMsgs[phone]) {
     allMsgs[phone] = allMsgs[phone].map(m => {
@@ -307,8 +423,12 @@ export function updateMessageStatus(phone, messageId, newStatus) {
 
   if (isLiveFirebase) {
     try {
-      const msgRef = doc(db, 'chats', phone, 'messages', messageId);
-      updateDoc(msgRef, { status: newStatus });
+      const msgRef = doc(db, 'tenants', tenantId, 'contacts', phone, 'messages', messageId);
+      updateDoc(msgRef, { status: newStatus }).catch(() => {
+        // Fallback root collection
+        const legacyRef = doc(db, 'chats', phone, 'messages', messageId);
+        updateDoc(legacyRef, { status: newStatus }).catch(() => {});
+      });
     } catch (e) {}
   }
 }
@@ -316,7 +436,14 @@ export function updateMessageStatus(phone, messageId, newStatus) {
 // ----------------------------------------------------
 // Update Contact Details (Tags, Notes, 24h expiry trigger, etc.)
 // ----------------------------------------------------
-export function updateContact(phone, updateData) {
+export function updateContact(tenantId = DEFAULT_TENANT_ID, phone, updateData) {
+  if (typeof phone === 'object') {
+    updateData = phone;
+    phone = tenantId;
+    tenantId = DEFAULT_TENANT_ID;
+  }
+  tenantId = tenantId || DEFAULT_TENANT_ID;
+
   const contacts = getStoredContacts();
   const idx = contacts.findIndex(c => c.phone === phone);
   if (idx !== -1) {
@@ -326,36 +453,85 @@ export function updateContact(phone, updateData) {
 
   if (isLiveFirebase) {
     try {
-      const contactRef = doc(db, 'contacts', phone);
-      updateDoc(contactRef, updateData);
+      const contactRef = doc(db, 'tenants', tenantId, 'contacts', phone);
+      setDoc(contactRef, updateData, { merge: true }).catch(() => {
+        const legacyRef = doc(db, 'contacts', phone);
+        updateDoc(legacyRef, updateData).catch(() => {});
+      });
     } catch (e) {}
   }
 }
 
 // Mark contact messages as read
-export function markContactAsRead(phone) {
-  updateContact(phone, { unreadCount: 0 });
+export function markContactAsRead(tenantId = DEFAULT_TENANT_ID, phone) {
+  if (!phone) {
+    phone = tenantId;
+    tenantId = DEFAULT_TENANT_ID;
+  }
+  updateContact(tenantId, phone, { unreadCount: 0 });
 }
 
 // Toggle 24-hour Session Window for testing
-export function toggle24hWindow(phone, setActive) {
+export function toggle24hWindow(tenantId = DEFAULT_TENANT_ID, phone, setActive) {
+  if (typeof phone === 'boolean') {
+    setActive = phone;
+    phone = tenantId;
+    tenantId = DEFAULT_TENANT_ID;
+  }
+  tenantId = tenantId || DEFAULT_TENANT_ID;
+
   const now = Date.now();
   const updateData = {
     is24hActive: setActive,
     windowExpiry: setActive ? now + (24 * 60 * 60 * 1000) : now - 1000
   };
-  updateContact(phone, updateData);
+  updateContact(tenantId, phone, updateData);
 }
 
 // ----------------------------------------------------
-// Meta API Settings configuration
+// Meta API Settings configuration per Tenant
 // ----------------------------------------------------
-export function saveMetaConfig(config) {
-  localStorage.setItem(STORAGE_KEY_CONFIG, JSON.stringify(config));
+export function saveMetaConfig(tenantId = DEFAULT_TENANT_ID, config) {
+  if (typeof tenantId === 'object') {
+    config = tenantId;
+    tenantId = DEFAULT_TENANT_ID;
+  }
+  tenantId = tenantId || DEFAULT_TENANT_ID;
+
+  localStorage.setItem(`${STORAGE_KEY_CONFIG}_${tenantId}`, JSON.stringify(config));
+  
   if (isLiveFirebase) {
     try {
-      setDoc(doc(db, 'settings', 'metaConfig'), config, { merge: true });
-    } catch (e) {}
+      setDoc(doc(db, 'tenants', tenantId), {
+        ...config,
+        tenantId,
+        updatedAt: serverTimestamp()
+      }, { merge: true });
+    } catch (e) {
+      console.warn('Error saving tenant config to Firestore:', e);
+    }
   }
-  eventHub.dispatchEvent(new CustomEvent('config_updated', { detail: config }));
+
+  // Also sync to backend API endpoint /api/tenant-config
+  try {
+    fetch(`${BACKEND_URL}/api/tenant-config`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        tenantId,
+        phoneNumberId: config.phoneNumberId,
+        wabaId: config.wabaId,
+        permanentToken: config.accessToken || config.permanentToken,
+        verifyToken: config.verifyToken,
+        name: config.name || 'USCA Academy'
+      })
+    }).then(res => res.json()).then(data => {
+      console.log('Backend tenant config saved:', data);
+    }).catch(err => {
+      console.warn('Backend tenant-config call error:', err);
+    });
+  } catch (e) {}
+
+  eventHub.dispatchEvent(new CustomEvent('config_updated', { detail: { tenantId, config } }));
 }
+

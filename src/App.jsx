@@ -60,9 +60,12 @@ function MainApp() {
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [showSimulatorModal, setShowSimulatorModal] = useState(false);
 
-  // Subscribe to real-time contacts
+  const tenantId = currentUser?.tenantId || 'usca_academy';
+
+  // Subscribe to real-time contacts scoped to tenantId
   useEffect(() => {
-    const unsubscribe = subscribeToContacts((updatedContacts) => {
+    if (!currentUser) return;
+    const unsubscribe = subscribeToContacts(tenantId, (updatedContacts) => {
       setContacts(updatedContacts);
       
       // Auto-select first contact if none selected
@@ -76,24 +79,24 @@ function MainApp() {
     });
 
     return () => unsubscribe();
-  }, [selectedContact?.phone]);
+  }, [currentUser, tenantId, selectedContact?.phone]);
 
-  // Subscribe to real-time messages for currently selected contact
+  // Subscribe to real-time messages for currently selected contact scoped to tenantId
   useEffect(() => {
-    if (!selectedContact?.phone) {
+    if (!currentUser || !selectedContact?.phone) {
       setMessages([]);
       return;
     }
 
     // Mark as read when selected
-    markContactAsRead(selectedContact.phone);
+    markContactAsRead(tenantId, selectedContact.phone);
 
-    const unsubscribe = subscribeToMessages(selectedContact.phone, (newMessages) => {
+    const unsubscribe = subscribeToMessages(tenantId, selectedContact.phone, (newMessages) => {
       setMessages(newMessages);
     });
 
     return () => unsubscribe();
-  }, [selectedContact?.phone]);
+  }, [currentUser, tenantId, selectedContact?.phone]);
 
   // Show Auth Modal if not authenticated
   if (!currentUser) {
@@ -108,7 +111,7 @@ function MainApp() {
         selectedContact={selectedContact}
         onSelectContact={(c) => {
           setSelectedContact(c);
-          markContactAsRead(c.phone);
+          markContactAsRead(tenantId, c.phone);
         }}
         activeTab={activeTab}
         setActiveTab={setActiveTab}
@@ -117,6 +120,7 @@ function MainApp() {
         onOpenSettings={() => setShowSettingsModal(true)}
         onOpenSimulator={() => setShowSimulatorModal(true)}
         currentUser={currentUser}
+        tenantId={tenantId}
       />
 
       {/* Main Chat Feed */}
@@ -125,19 +129,21 @@ function MainApp() {
         messages={messages}
         onToggleRightSidebar={() => setShowRightSidebar(!showRightSidebar)}
         showRightSidebar={showRightSidebar}
+        tenantId={tenantId}
       />
 
       {/* Right Sidebar - Contact Info, Tags & Agent Notes */}
       {showRightSidebar && selectedContact && (
         <ContactDetails 
           contact={selectedContact}
+          tenantId={tenantId}
           onClose={() => setShowRightSidebar(false)}
         />
       )}
 
       {/* Meta Settings Configuration Modal */}
       {showSettingsModal && (
-        <MetaSettingsModal onClose={() => setShowSettingsModal(false)} />
+        <MetaSettingsModal tenantId={tenantId} onClose={() => setShowSettingsModal(false)} />
       )}
 
       {/* Meta Webhook & Event Simulator Modal */}
@@ -145,6 +151,7 @@ function MainApp() {
         <WebhookSimulator 
           contacts={contacts}
           selectedContact={selectedContact}
+          tenantId={tenantId}
           onClose={() => setShowSimulatorModal(false)}
         />
       )}

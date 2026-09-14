@@ -23,7 +23,8 @@ export default function Sidebar({
   setSearchQuery,
   onOpenSettings,
   onOpenSimulator,
-  currentUser
+  currentUser,
+  tenantId = 'usca_academy'
 }) {
   const formatTime = (ts) => {
     if (!ts) return '';
@@ -82,10 +83,15 @@ export default function Sidebar({
             <span className="absolute bottom-0 right-0 w-3 h-3 bg-[#00a884] rounded-full border-2 border-[#202c33]"></span>
           </div>
           <div>
-            <h2 className="text-sm font-semibold text-[#e9edef] leading-tight">
-              {currentUser?.name || "Agent Support"}
-            </h2>
-            <span className="text-xs text-[#00a884] font-medium flex items-center gap-1">
+            <div className="flex items-center gap-1.5">
+              <h2 className="text-sm font-semibold text-[#e9edef] leading-tight">
+                {currentUser?.name || "Agent Support"}
+              </h2>
+              <span className="text-[10px] font-mono text-[#00a884] bg-[#00a884]/10 border border-[#00a884]/30 px-1.5 py-0.2 rounded">
+                {tenantId}
+              </span>
+            </div>
+            <span className="text-xs text-[#00a884] font-medium flex items-center gap-1 mt-0.5">
               <span className="w-1.5 h-1.5 rounded-full bg-[#00a884] animate-pulse"></span>
               Live Inbox Active
             </span>

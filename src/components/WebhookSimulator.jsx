@@ -12,7 +12,7 @@ import {
 } from 'lucide-react';
 import { simulateInboundMessage, updateMessageStatus, toggle24hWindow } from '../firebase/storeService';
 
-export default function WebhookSimulator({ contacts = [], selectedContact, onClose }) {
+export default function WebhookSimulator({ contacts = [], selectedContact, tenantId = 'usca_academy', onClose }) {
   const [phone, setPhone] = useState(selectedContact?.phone || '971501234567');
   const [name, setName] = useState(selectedContact?.name || 'Rashid Al-Maktoum');
   const [msgBody, setMsgBody] = useState('Can you send me the floor plan for Yas Island 2-bedroom units?');
@@ -24,6 +24,7 @@ export default function WebhookSimulator({ contacts = [], selectedContact, onClo
     if (!phone) return;
 
     await simulateInboundMessage({
+      tenantId,
       phone,
       name: name || `Customer ${phone.slice(-4)}`,
       body: simType === 'button_reply' ? 'Get Investment Details' : msgBody,
@@ -40,6 +41,7 @@ export default function WebhookSimulator({ contacts = [], selectedContact, onClo
     setButtonPayload('PAYLOAD_GET_INVESTMENT_DETAILS');
 
     await simulateInboundMessage({
+      tenantId,
       phone: '971501234567',
       name: 'Rashid Al-Maktoum',
       body: 'Get Investment Details',
@@ -56,6 +58,7 @@ export default function WebhookSimulator({ contacts = [], selectedContact, onClo
     setButtonPayload('PAYLOAD_PRE_REGISTER');
 
     await simulateInboundMessage({
+      tenantId,
       phone: '971501234567',
       name: 'Rashid Al-Maktoum',
       body: 'Pre Register',

@@ -23,7 +23,8 @@ export default function ChatWindow({
   contact, 
   messages = [], 
   onToggleRightSidebar, 
-  showRightSidebar 
+  showRightSidebar,
+  tenantId = 'usca_academy'
 }) {
   const [inputText, setInputText] = useState('');
   const [showTemplateModal, setShowTemplateModal] = useState(false);
@@ -72,6 +73,7 @@ export default function ChatWindow({
     setInputText('');
 
     await sendOutboundMessage({
+      tenantId,
       phone: contact.phone,
       body: textToSend,
       type: 'text'
@@ -88,6 +90,7 @@ export default function ChatWindow({
     });
 
     await sendOutboundMessage({
+      tenantId,
       phone: contact.phone,
       body: bodyText,
       type: 'template',
