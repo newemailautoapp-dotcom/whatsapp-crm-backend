@@ -16,7 +16,9 @@ import {
   Power, 
   Edit3, 
   Sparkles,
-  ExternalLink
+  ExternalLink,
+  Eye,
+  EyeOff
 } from 'lucide-react';
 import { subscribeToAllTenants, provisionNewTenant, toggleTenantStatus, updateTenantConfig } from '../firebase/storeService';
 
@@ -44,14 +46,16 @@ export default function SuperAdminDashboard({ currentUser, onNavigateToInbox }) 
   const [tenantId, setTenantId] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [phoneNumberId, setPhoneNumberId] = useState('');
   const [wabaId, setWabaId] = useState('');
   const [permanentToken, setPermanentToken] = useState('');
   const [verifyToken, setVerifyToken] = useState('');
 
-  // Auto-generate random verify token on mount
+  // Auto-generate initial credentials on mount
   useEffect(() => {
     generateRandomVerifyToken();
+    generateRandomPassword();
   }, []);
 
   // Real-time tenants subscription
@@ -96,11 +100,28 @@ export default function SuperAdminDashboard({ currentUser, onNavigateToInbox }) 
     setVerifyToken(`verify_token_${randomHex}`);
   };
 
+  const generateRandomPassword = () => {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%';
+    let pwd = 'Crm!';
+    for (let i = 0; i < 6; i++) {
+      pwd += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    setPassword(pwd);
+  };
+
+  const generateSuggestedEmail = (slug) => {
+    const targetSlug = slug || tenantId || 'client';
+    setEmail(`admin@${targetSlug}.com`);
+  };
+
   const handleNameChange = (e) => {
     const val = e.target.value;
     setName(val);
     const autoSlug = val.toLowerCase().trim().replace(/[^a-z0-9]/g, '_').replace(/_+/g, '_');
     setTenantId(autoSlug);
+    if (!email || email.startsWith('admin@')) {
+      setEmail(`admin@${autoSlug || 'client'}.com`);
+    }
   };
 
   const handleProvision = async (e) => {
@@ -223,7 +244,7 @@ Dashboard URL: https://whatsapp-crm-app-904e8.web.app
   }
 
   return (
-    <div className="min-h-screen bg-[#0b141a] text-[#e9edef] p-6 overflow-y-auto">
+    <div className="min-h-screen h-auto overflow-y-auto w-full bg-[#0b141a] text-[#e9edef] p-6 select-text">
       {/* Top Header */}
       <div className="max-w-6xl mx-auto flex items-center justify-between pb-6 border-b border-[#222d34] mb-6">
         <div className="flex items-center gap-3">
@@ -260,7 +281,7 @@ Dashboard URL: https://whatsapp-crm-app-904e8.web.app
         </div>
       </div>
 
-      <div className="max-w-6xl mx-auto space-y-8">
+      <div className="max-w-6xl mx-auto space-y-8 pb-12">
         {/* Success Banner */}
         {successData && (
           <div className="bg-[#00a884]/10 border border-[#00a884]/40 rounded-2xl p-5 space-y-3 animate-fade-in">
@@ -331,14 +352,29 @@ Dashboard URL: https://whatsapp-crm-app-904e8.web.app
                   required
                   placeholder="e.g. usca_academy"
                   value={tenantId}
-                  onChange={(e) => setTenantId(e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, ''))}
+                  onChange={(e) => {
+                    const newSlug = e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, '');
+                    setTenantId(newSlug);
+                    if (!email || email.startsWith('admin@')) {
+                      setEmail(`admin@${newSlug || 'client'}.com`);
+                    }
+                  }}
                   className="w-full bg-[#111b21] text-xs text-[#00a884] font-mono border border-[#222d34] rounded-lg pl-9 p-2.5 outline-none focus:border-[#00a884]"
                 />
               </div>
             </div>
 
             <div>
-              <label className="text-xs text-[#8696a0] block mb-1">Client Admin Login Email *</label>
+              <div className="flex items-center justify-between mb-1">
+                <label className="text-xs text-[#8696a0]">Client Admin Login Email *</label>
+                <button
+                  type="button"
+                  onClick={() => generateSuggestedEmail()}
+                  className="text-[11px] text-[#00a884] hover:underline flex items-center gap-1"
+                >
+                  <RefreshCw className="w-3 h-3" /> Generate Email
+                </button>
+              </div>
               <div className="relative flex items-center">
                 <Mail className="w-4 h-4 text-[#8696a0] absolute left-3" />
                 <input 
@@ -353,17 +389,33 @@ Dashboard URL: https://whatsapp-crm-app-904e8.web.app
             </div>
 
             <div>
-              <label className="text-xs text-[#8696a0] block mb-1">Initial Password *</label>
+              <div className="flex items-center justify-between mb-1">
+                <label className="text-xs text-[#8696a0]">Initial Password *</label>
+                <button
+                  type="button"
+                  onClick={generateRandomPassword}
+                  className="text-[11px] text-[#00a884] hover:underline flex items-center gap-1"
+                >
+                  <RefreshCw className="w-3 h-3" /> Generate Password
+                </button>
+              </div>
               <div className="relative flex items-center">
                 <Lock className="w-4 h-4 text-[#8696a0] absolute left-3" />
                 <input 
-                  type="password"
+                  type={showPassword ? "text" : "password"}
                   required
                   placeholder="••••••••"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  className="w-full bg-[#111b21] text-xs text-[#e9edef] border border-[#222d34] rounded-lg pl-9 p-2.5 outline-none focus:border-[#00a884]"
+                  className="w-full bg-[#111b21] text-xs text-[#e9edef] border border-[#222d34] rounded-lg pl-9 pr-9 p-2.5 outline-none focus:border-[#00a884]"
                 />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute right-3 text-[#8696a0] hover:text-[#e9edef] transition-colors"
+                >
+                  {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
               </div>
             </div>
 
