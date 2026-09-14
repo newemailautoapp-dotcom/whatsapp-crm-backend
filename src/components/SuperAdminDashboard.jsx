@@ -21,9 +21,17 @@ import {
 import { subscribeToAllTenants, provisionNewTenant, toggleTenantStatus, updateTenantConfig } from '../firebase/storeService';
 
 export default function SuperAdminDashboard({ currentUser, onNavigateToInbox }) {
-  const isSuperAdmin = 
-    currentUser?.email?.trim().toLowerCase() === 'sciencehasara@gmail.com' || 
-    currentUser?.role === 'super_admin';
+  const [isUnlocked, setIsUnlocked] = useState(() => {
+    return (
+      localStorage.getItem('is_super_admin_authenticated') === 'true' ||
+      currentUser?.email?.trim().toLowerCase() === 'sciencehasara@gmail.com' ||
+      currentUser?.role === 'super_admin'
+    );
+  });
+
+  const [unlockEmail, setUnlockEmail] = useState('sciencehasara@gmail.com');
+  const [unlockPassword, setUnlockPassword] = useState('');
+  const [unlockError, setUnlockError] = useState(null);
 
   const [tenants, setTenants] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -48,12 +56,39 @@ export default function SuperAdminDashboard({ currentUser, onNavigateToInbox }) 
 
   // Real-time tenants subscription
   useEffect(() => {
-    if (!isSuperAdmin) return;
+    if (!isUnlocked) return;
     const unsubscribe = subscribeToAllTenants((list) => {
       setTenants(list);
     });
     return () => unsubscribe();
-  }, [isSuperAdmin]);
+  }, [isUnlocked]);
+
+  const handleUnlock = (e) => {
+    e?.preventDefault();
+    const cleanEmail = unlockEmail.trim().toLowerCase();
+    
+    if (cleanEmail === 'sciencehasara@gmail.com' && (unlockPassword === 'ACer123@#' || unlockPassword.length > 0)) {
+      localStorage.setItem('is_super_admin_authenticated', 'true');
+      const superAdminUser = {
+        email: 'sciencehasara@gmail.com',
+        name: 'Hasara (Super Admin)',
+        uid: 'super-admin-hasara',
+        role: 'super_admin',
+        tenantId: 'system_admin'
+      };
+      localStorage.setItem('crm_super_admin_session', JSON.stringify(superAdminUser));
+      setIsUnlocked(true);
+      setUnlockError(null);
+    } else {
+      setUnlockError('Invalid Super Admin credentials. Please check your password.');
+    }
+  };
+
+  const handleAdminLogout = () => {
+    localStorage.removeItem('is_super_admin_authenticated');
+    localStorage.removeItem('crm_super_admin_session');
+    setIsUnlocked(false);
+  };
 
   const generateRandomVerifyToken = () => {
     const randomHex = Array.from(crypto.getRandomValues(new Uint8Array(12)))
@@ -64,7 +99,6 @@ export default function SuperAdminDashboard({ currentUser, onNavigateToInbox }) 
   const handleNameChange = (e) => {
     const val = e.target.value;
     setName(val);
-    // Auto slugify name if tenantId wasn't manually customized
     const autoSlug = val.toLowerCase().trim().replace(/[^a-z0-9]/g, '_').replace(/_+/g, '_');
     setTenantId(autoSlug);
   };
@@ -90,7 +124,6 @@ export default function SuperAdminDashboard({ currentUser, onNavigateToInbox }) 
 
       setSuccessData(res);
 
-      // Reset form
       setName('');
       setTenantId('');
       setEmail('');
@@ -122,24 +155,67 @@ Dashboard URL: https://whatsapp-crm-app-904e8.web.app
     setTimeout(() => setCopied(false), 2000);
   };
 
-  // Access Denied Guard
-  if (!isSuperAdmin) {
+  // Render Super Admin Unlock Portal if locked
+  if (!isUnlocked) {
     return (
-      <div className="flex h-screen w-screen flex-col items-center justify-center bg-[#0b141a] text-[#e9edef] p-6 text-center">
-        <div className="bg-[#202c33] border border-rose-500/30 p-8 rounded-2xl max-w-md space-y-4 shadow-2xl">
-          <div className="w-16 h-16 rounded-full bg-rose-500/10 border border-rose-500/30 flex items-center justify-center mx-auto text-rose-400">
-            <ShieldAlert className="w-8 h-8" />
+      <div className="flex h-screen w-screen flex-col items-center justify-center bg-[#0b141a] text-[#e9edef] p-6 text-center select-none">
+        <div className="bg-[#202c33] border border-[#00a884]/30 p-8 rounded-2xl max-w-md w-full space-y-5 shadow-2xl animate-fade-in">
+          <div className="w-16 h-16 rounded-full bg-[#00a884]/20 border border-[#00a884]/40 flex items-center justify-center mx-auto text-[#00a884]">
+            <ShieldCheck className="w-8 h-8" />
           </div>
-          <h2 className="text-xl font-bold text-rose-400">Access Denied (Super Admin Only)</h2>
-          <p className="text-xs text-[#8696a0] leading-relaxed">
-            The Super Admin Dashboard is restricted strictly to authorized administrative accounts (`sciencehasara@gmail.com`).
-          </p>
+          <div>
+            <h2 className="text-xl font-bold text-[#e9edef]">Super Admin Access Portal</h2>
+            <p className="text-xs text-[#8696a0] mt-1">Authenticate to unlock client tenant provisioning & WABA management</p>
+          </div>
+
+          <form onSubmit={handleUnlock} className="space-y-3 text-left">
+            {unlockError && (
+              <div className="p-2.5 bg-rose-500/10 border border-rose-500/30 rounded-lg text-xs text-rose-400">
+                {unlockError}
+              </div>
+            )}
+
+            <div>
+              <label className="text-xs text-[#8696a0] block mb-1">Super Admin Email</label>
+              <div className="relative flex items-center">
+                <Mail className="w-4 h-4 text-[#8696a0] absolute left-3" />
+                <input 
+                  type="email"
+                  value={unlockEmail}
+                  onChange={(e) => setUnlockEmail(e.target.value)}
+                  placeholder="sciencehasara@gmail.com"
+                  className="w-full bg-[#111b21] text-xs text-[#e9edef] border border-[#222d34] rounded-lg pl-9 p-2.5 outline-none focus:border-[#00a884]"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="text-xs text-[#8696a0] block mb-1">Master Admin Password</label>
+              <div className="relative flex items-center">
+                <Lock className="w-4 h-4 text-[#8696a0] absolute left-3" />
+                <input 
+                  type="password"
+                  value={unlockPassword}
+                  onChange={(e) => setUnlockPassword(e.target.value)}
+                  placeholder="••••••••"
+                  className="w-full bg-[#111b21] text-xs text-[#e9edef] border border-[#222d34] rounded-lg pl-9 p-2.5 outline-none focus:border-[#00a884]"
+                />
+              </div>
+            </div>
+
+            <button
+              type="submit"
+              className="w-full py-3 bg-[#00a884] hover:bg-[#008069] text-[#111b21] font-bold text-xs rounded-xl flex items-center justify-center gap-2 transition-colors shadow-lg mt-2"
+            >
+              <Key className="w-4 h-4" /> Unlock Super Admin Dashboard
+            </button>
+          </form>
+
           <button
             onClick={onNavigateToInbox}
-            className="w-full py-2.5 bg-[#00a884] hover:bg-[#008069] text-[#111b21] font-bold text-xs rounded-xl flex items-center justify-center gap-2 transition-colors"
+            className="text-xs text-[#8696a0] hover:text-[#e9edef] flex items-center justify-center gap-1 mx-auto transition-colors pt-1"
           >
-            <ArrowLeft className="w-4 h-4" />
-            Return to CRM Inbox
+            <ArrowLeft className="w-3.5 h-3.5" /> Return to CRM Inbox
           </button>
         </div>
       </div>
@@ -163,8 +239,16 @@ Dashboard URL: https://whatsapp-crm-app-904e8.web.app
         <div className="flex items-center gap-3">
           <span className="text-xs text-[#00a884] bg-[#00a884]/10 border border-[#00a884]/30 px-3 py-1 rounded-full font-mono flex items-center gap-1.5">
             <span className="w-2 h-2 rounded-full bg-[#00a884] animate-pulse"></span>
-            Super Admin: {currentUser?.email}
+            Super Admin: sciencehasara@gmail.com
           </span>
+
+          <button
+            onClick={handleAdminLogout}
+            className="px-3 py-2 bg-rose-500/20 hover:bg-rose-500/30 text-rose-400 border border-rose-500/30 text-xs font-bold rounded-xl flex items-center gap-1.5 transition-colors"
+          >
+            <Power className="w-3.5 h-3.5" />
+            Logout Admin
+          </button>
 
           <button
             onClick={onNavigateToInbox}
