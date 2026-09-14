@@ -21,7 +21,9 @@ import {
 import { subscribeToAllTenants, provisionNewTenant, toggleTenantStatus, updateTenantConfig } from '../firebase/storeService';
 
 export default function SuperAdminDashboard({ currentUser, onNavigateToInbox }) {
-  const isSuperAdmin = currentUser?.email === 'sciencehasara@gmail.com';
+  const isSuperAdmin = 
+    currentUser?.email?.trim().toLowerCase() === 'sciencehasara@gmail.com' || 
+    currentUser?.role === 'super_admin';
 
   const [tenants, setTenants] = useState([]);
   const [loading, setLoading] = useState(false);

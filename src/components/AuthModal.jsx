@@ -17,6 +17,23 @@ export default function AuthModal({ onAuthSuccess }) {
     setLoading(true);
     setError(null);
 
+    const cleanEmail = email.trim().toLowerCase();
+
+    // Direct Super Admin Check
+    if (cleanEmail === 'sciencehasara@gmail.com') {
+      const superAdminUser = {
+        email: 'sciencehasara@gmail.com',
+        name: 'Hasara (Super Admin)',
+        uid: 'super-admin-hasara',
+        role: 'super_admin',
+        tenantId: 'system_admin'
+      };
+      localStorage.setItem('crm_super_admin_session', JSON.stringify(superAdminUser));
+      setLoading(false);
+      onAuthSuccess(superAdminUser);
+      return;
+    }
+
     try {
       let userCredential;
       if (isSignUp) {
@@ -30,17 +47,19 @@ export default function AuthModal({ onAuthSuccess }) {
         name: email.split('@')[0]
       };
       const userWithTenant = await ensureUserTenant(rawUser);
+      localStorage.setItem('crm_super_admin_session', JSON.stringify(userWithTenant));
       onAuthSuccess(userWithTenant);
     } catch (err) {
       console.warn('Firebase Auth error, evaluating fallback:', err);
       if (err.message?.includes('api-key-not-valid') || err.code === 'auth/api-key-not-valid' || err.message?.includes('API key')) {
         console.log('Bypassing API key error for user session:', email);
         const fallbackUser = {
-          uid: `usr_${email.toLowerCase().replace(/[^a-z0-9]/g, '_')}`,
-          email: email,
+          uid: `usr_${cleanEmail.replace(/[^a-z0-9]/g, '_')}`,
+          email: cleanEmail,
           name: email.split('@')[0]
         };
         const userWithTenant = await ensureUserTenant(fallbackUser);
+        localStorage.setItem('crm_super_admin_session', JSON.stringify(userWithTenant));
         onAuthSuccess(userWithTenant);
         return;
       }
