@@ -137,10 +137,12 @@ function MainApp() {
   // Render Super Admin Dashboard view if route is 'super-admin'
   if (currentRoute === 'super-admin') {
     return (
-      <SuperAdminDashboard 
-        currentUser={currentUser} 
-        onNavigateToInbox={() => navigateTo('inbox')} 
-      />
+      <div className="w-full h-screen overflow-y-auto bg-[#0b141a]">
+        <SuperAdminDashboard 
+          currentUser={currentUser} 
+          onNavigateToInbox={() => navigateTo('inbox')} 
+        />
+      </div>
     );
   }
 
