@@ -97,28 +97,6 @@ export default function AuthModal({ onAuthSuccess }) {
           <p className="text-xs text-[#8696a0] mt-1">Multi-Agent Live Chat & Meta API Dashboard</p>
         </div>
 
-        {/* Demo Bypass Action Button (Recommended for immediate review) */}
-        <div className="bg-[#111b21] border border-[#00a884]/30 rounded-xl p-4 space-y-3">
-          <span className="text-xs text-[#00a884] font-semibold block uppercase">
-            ⚡ Quick Access Mode
-          </span>
-          <p className="text-xs text-[#8696a0]">
-            Bypass Firebase Auth setup and launch the dashboard immediately as a demo agent.
-          </p>
-          <button
-            onClick={handleDemoBypass}
-            className="w-full py-3 bg-[#00a884] hover:bg-[#008069] text-[#111b21] text-xs font-bold rounded-xl flex items-center justify-center gap-2 transition-colors shadow-lg"
-          >
-            Launch Instant Demo Agent Login
-            <ArrowRight className="w-4 h-4" />
-          </button>
-        </div>
-
-        <div className="relative flex items-center justify-center">
-          <span className="h-px bg-[#222d34] w-full"></span>
-          <span className="bg-[#202c33] px-3 text-xs text-[#8696a0] uppercase font-semibold">Or Firebase Auth</span>
-        </div>
-
         {/* Firebase Email Auth Form */}
         <form onSubmit={handleFirebaseAuth} className="space-y-3 text-left">
           {error && (

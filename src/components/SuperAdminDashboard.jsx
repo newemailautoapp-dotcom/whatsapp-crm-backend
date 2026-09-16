@@ -18,7 +18,8 @@ import {
   Sparkles,
   ExternalLink,
   Eye,
-  EyeOff
+  EyeOff,
+  Globe
 } from 'lucide-react';
 import { subscribeToAllTenants, provisionNewTenant, toggleTenantStatus, updateTenantConfig } from '../firebase/storeService';
 
@@ -39,6 +40,8 @@ export default function SuperAdminDashboard({ currentUser, onNavigateToInbox }) 
   const [loading, setLoading] = useState(false);
   const [successData, setSuccessData] = useState(null);
   const [copied, setCopied] = useState(false);
+  const [copiedUrl, setCopiedUrl] = useState(false);
+  const [copiedVerifyToken, setCopiedVerifyToken] = useState(false);
   const [editingTenant, setEditingTenant] = useState(null);
 
   // Form State
@@ -174,6 +177,20 @@ Dashboard URL: https://whatsapp-crm-app-904e8.web.app
     navigator.clipboard.writeText(text);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+  };
+
+  const copyCallbackUrl = () => {
+    const url = 'https://whatsapp-crm-backend-enzj.onrender.com/webhook';
+    navigator.clipboard.writeText(url);
+    setCopiedUrl(true);
+    setTimeout(() => setCopiedUrl(false), 2000);
+  };
+
+  const copyVerifyToken = () => {
+    const token = verifyToken || 'whatsapp_crm_verify_token_2026';
+    navigator.clipboard.writeText(token);
+    setCopiedVerifyToken(true);
+    setTimeout(() => setCopiedVerifyToken(false), 2000);
   };
 
   // Render Super Admin Unlock Portal if locked
@@ -319,6 +336,61 @@ Dashboard URL: https://whatsapp-crm-app-904e8.web.app
             </div>
           </div>
         )}
+
+        {/* Meta Webhook Setup Credentials Card */}
+        <div className="bg-[#202c33] border border-[#00a884]/30 rounded-2xl p-6 shadow-xl space-y-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2 text-[#00a884]">
+              <Globe className="w-5 h-5" />
+              <h2 className="text-base font-bold text-[#e9edef]">Meta Webhook Setup Credentials</h2>
+            </div>
+            <span className="text-[11px] text-[#00a884] bg-[#00a884]/10 border border-[#00a884]/30 px-3 py-1 rounded-full font-mono font-bold flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-full bg-[#00a884] animate-pulse"></span>
+              Production Live Endpoint
+            </span>
+          </div>
+          <p className="text-xs text-[#8696a0]">
+            Paste these backend webhook details directly into your Meta App Dashboard under <strong className="text-[#e9edef]">WhatsApp &gt; Configuration &gt; Webhook Edit</strong>.
+          </p>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* Callback URL */}
+            <div className="bg-[#111b21] p-4 rounded-xl border border-[#222d34] space-y-2">
+              <div className="flex items-center justify-between">
+                <label className="text-[10px] text-[#8696a0] font-bold uppercase tracking-wider">PRODUCTION CALLBACK URL</label>
+                <button
+                  type="button"
+                  onClick={copyCallbackUrl}
+                  className="text-xs text-[#00a884] hover:underline flex items-center gap-1 font-bold"
+                >
+                  {copiedUrl ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                  {copiedUrl ? 'Copied!' : 'Copy URL'}
+                </button>
+              </div>
+              <div className="text-xs font-mono text-[#00a884] bg-[#0b141a] p-2.5 rounded-lg border border-[#222d34] break-all select-all font-semibold">
+                https://whatsapp-crm-backend-enzj.onrender.com/webhook
+              </div>
+            </div>
+
+            {/* Verify Token */}
+            <div className="bg-[#111b21] p-4 rounded-xl border border-[#222d34] space-y-2">
+              <div className="flex items-center justify-between">
+                <label className="text-[10px] text-[#8696a0] font-bold uppercase tracking-wider">WEBHOOK VERIFY TOKEN</label>
+                <button
+                  type="button"
+                  onClick={copyVerifyToken}
+                  className="text-xs text-[#00a884] hover:underline flex items-center gap-1 font-bold"
+                >
+                  {copiedVerifyToken ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                  {copiedVerifyToken ? 'Copied!' : 'Copy Token'}
+                </button>
+              </div>
+              <div className="text-xs font-mono text-[#00a884] bg-[#0b141a] p-2.5 rounded-lg border border-[#222d34] break-all select-all font-semibold">
+                {verifyToken || 'verify_token_default'}
+              </div>
+            </div>
+          </div>
+        </div>
 
         {/* Provisioning Form */}
         <div className="bg-[#202c33] border border-[#222d34] rounded-2xl p-6 shadow-xl space-y-4">
@@ -547,23 +619,27 @@ Dashboard URL: https://whatsapp-crm-app-904e8.web.app
                           {isActive ? 'ACTIVE' : 'INACTIVE'}
                         </span>
                       </td>
-                      <td className="p-3 text-right space-x-2">
-                        <button
-                          onClick={() => setEditingTenant(t)}
-                          className="px-2.5 py-1 bg-[#2a3942] hover:bg-[#344652] text-xs text-[#e9edef] rounded-lg transition-colors"
-                        >
-                          Edit Credentials
-                        </button>
-                        <button
-                          onClick={() => toggleTenantStatus(t.tenantId, !isActive)}
-                          className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-colors ${
-                            isActive 
-                              ? 'bg-rose-500/20 text-rose-400 hover:bg-rose-500/30' 
-                              : 'bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30'
-                          }`}
-                        >
-                          {isActive ? 'Deactivate' : 'Activate'}
-                        </button>
+                      <td className="p-3 text-right">
+                        <div className="flex items-center justify-end gap-2 whitespace-nowrap">
+                          <button
+                            onClick={() => setEditingTenant(t)}
+                            className="px-3 py-1.5 bg-[#2a3942] hover:bg-[#344652] text-xs text-[#e9edef] font-medium rounded-lg transition-colors flex items-center gap-1.5"
+                          >
+                            <Edit3 className="w-3.5 h-3.5" />
+                            Edit Credentials
+                          </button>
+                          <button
+                            onClick={() => toggleTenantStatus(t.tenantId, !isActive)}
+                            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors flex items-center gap-1.5 ${
+                              isActive 
+                                ? 'bg-rose-500/20 text-rose-400 hover:bg-rose-500/30 border border-rose-500/30' 
+                                : 'bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30 border border-emerald-500/30'
+                            }`}
+                          >
+                            <Power className="w-3.5 h-3.5" />
+                            {isActive ? 'Deactivate' : 'Activate'}
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   );
