@@ -129,6 +129,15 @@ function MainApp() {
     return () => unsubscribe();
   }, [currentUser, currentRoute, tenantId, selectedContact?.phone]);
 
+  const handleLogout = () => {
+    localStorage.removeItem('crm_super_admin_session');
+    localStorage.removeItem('is_super_admin_authenticated');
+    setCurrentUser(null);
+    setSelectedContact(null);
+    setContacts([]);
+    setMessages([]);
+  };
+
   // Show Auth Modal if not authenticated
   if (!currentUser) {
     return <AuthModal onAuthSuccess={(user) => setCurrentUser(user)} />;
@@ -163,6 +172,7 @@ function MainApp() {
         onOpenSettings={() => setShowSettingsModal(true)}
         onOpenSimulator={() => setShowSimulatorModal(true)}
         onNavigateToSuperAdmin={() => navigateTo('super-admin')}
+        onLogout={handleLogout}
         currentUser={currentUser}
         tenantId={tenantId}
       />

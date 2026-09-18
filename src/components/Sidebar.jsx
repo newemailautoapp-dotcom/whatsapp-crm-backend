@@ -10,7 +10,8 @@ import {
   UserCheck,
   Zap,
   Settings,
-  ShieldCheck
+  ShieldCheck,
+  LogOut
 } from 'lucide-react';
 import { format, isToday, isYesterday } from 'date-fns';
 
@@ -25,6 +26,7 @@ export default function Sidebar({
   onOpenSettings,
   onOpenSimulator,
   onNavigateToSuperAdmin,
+  onLogout,
   currentUser,
   tenantId = 'usca_academy'
 }) {
@@ -80,7 +82,7 @@ export default function Sidebar({
         <div className="flex items-center gap-3">
           <div className="relative">
             <img 
-              src={currentUser?.avatar || "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&auto=format&fit=crop&q=80"} 
+              src={currentUser?.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(currentUser?.name || 'Agent')}&background=00a884&color=fff`} 
               alt="Agent Avatar" 
               className="w-10 h-10 rounded-full object-cover border border-[#00a884]"
             />
@@ -91,7 +93,7 @@ export default function Sidebar({
               <h2 className="text-sm font-semibold text-[#e9edef] leading-tight">
                 {currentUser?.name || "Agent Support"}
               </h2>
-              <span className="text-[10px] font-mono text-[#00a884] bg-[#00a884]/10 border border-[#00a884]/30 px-1.5 py-0.2 rounded">
+              <span className="text-[10px] font-mono text-[#00a884] bg-[#00a884]/10 border border-[#00a884]/30 px-1.5 py-0.2 rounded font-bold">
                 {tenantId}
               </span>
             </div>
@@ -127,6 +129,15 @@ export default function Sidebar({
           >
             <Settings className="w-5 h-5" />
           </button>
+          {onLogout && (
+            <button 
+              onClick={onLogout}
+              title="Logout Session"
+              className="p-2 text-[#8696a0] hover:text-rose-400 hover:bg-[#2a3942] rounded-full transition-colors"
+            >
+              <LogOut className="w-4 h-4" />
+            </button>
+          )}
         </div>
       </div>
 

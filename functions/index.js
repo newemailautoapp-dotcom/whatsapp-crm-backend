@@ -123,19 +123,32 @@ app.get('/health', (req, res) => {
   res.status(200).json({ status: 'ok', service: 'whatsapp-crm-backend', timestamp: new Date().toISOString() });
 });
 
+// Helper function to normalize tenant IDs (e.g. uscaacademy -> usca_academy)
+function normalizeTenantId(rawTenantId) {
+  if (!rawTenantId) return 'usca_academy';
+  let cleaned = String(rawTenantId).trim().toLowerCase();
+  if (cleaned === 'uscaacademy' || cleaned === 'usca-academy' || cleaned === 'usca_academy') {
+    return 'usca_academy';
+  }
+  return cleaned;
+}
+
 // Multi-Tenant Helper: Lookup Tenant Config by Tenant ID (Default: usca_academy)
-async function getTenantConfig(tenantId = 'usca_academy') {
+async function getTenantConfig(rawTenantId = 'usca_academy') {
+  const tenantId = normalizeTenantId(rawTenantId);
   try {
     const tenantSnap = await db.doc(`tenants/${tenantId}`).get();
     if (tenantSnap.exists) {
       const data = tenantSnap.data();
+      const rawPhoneId = data.phoneNumberId || process.env.WHATSAPP_PHONE_NUMBER_ID || process.env.PHONE_NUMBER_ID;
+      const validPhoneId = (!rawPhoneId || rawPhoneId === '109823471092834') ? '1308538339013180' : rawPhoneId;
       return {
-        tenantId: tenantSnap.id,
+        tenantId: normalizeTenantId(data.tenantId || tenantSnap.id),
         name: data.name || 'USCA Academy',
-        phoneNumberId: data.phoneNumberId || process.env.WHATSAPP_PHONE_NUMBER_ID || process.env.PHONE_NUMBER_ID,
-        wabaId: data.wabaId || process.env.WABA_ID,
+        phoneNumberId: validPhoneId,
+        wabaId: data.wabaId || process.env.WABA_ID || '2126714',
         permanentToken: data.permanentToken || data.accessToken || process.env.WHATSAPP_ACCESS_TOKEN || process.env.WHATSAPP_TOKEN,
-        verifyToken: data.verifyToken || process.env.VERIFY_TOKEN || 'my_secure_token_123'
+        verifyToken: data.verifyToken || process.env.VERIFY_TOKEN || 'whatsapp_crm_verify_token_2026'
       };
     }
   } catch (err) {
@@ -143,13 +156,16 @@ async function getTenantConfig(tenantId = 'usca_academy') {
   }
 
   // Default Tenant Fallback (usca_academy) reading env vars
+  const rawEnvPhoneId = process.env.WHATSAPP_PHONE_NUMBER_ID || process.env.PHONE_NUMBER_ID || process.env.META_PHONE_NUMBER_ID;
+  const validEnvPhoneId = (!rawEnvPhoneId || rawEnvPhoneId === '109823471092834') ? '1308538339013180' : rawEnvPhoneId;
+
   return {
     tenantId: 'usca_academy',
     name: 'USCA Academy',
-    phoneNumberId: process.env.WHATSAPP_PHONE_NUMBER_ID || process.env.PHONE_NUMBER_ID || process.env.META_PHONE_NUMBER_ID,
-    wabaId: process.env.WABA_ID || process.env.META_WABA_ID,
+    phoneNumberId: validEnvPhoneId,
+    wabaId: process.env.WABA_ID || process.env.META_WABA_ID || '2126714',
     permanentToken: process.env.WHATSAPP_ACCESS_TOKEN || process.env.WHATSAPP_TOKEN || process.env.META_ACCESS_TOKEN,
-    verifyToken: process.env.WEBHOOK_VERIFY_TOKEN || process.env.VERIFY_TOKEN || 'my_secure_token_123'
+    verifyToken: process.env.WEBHOOK_VERIFY_TOKEN || process.env.VERIFY_TOKEN || 'whatsapp_crm_verify_token_2026'
   };
 }
 
@@ -161,11 +177,13 @@ async function findTenantByMetaIds(incomingPhoneId, incomingWabaId) {
       if (!querySnap.empty) {
         const docSnap = querySnap.docs[0];
         const data = docSnap.data();
+        const rawPhoneId = data.phoneNumberId;
+        const validPhoneId = (!rawPhoneId || rawPhoneId === '109823471092834') ? '1308538339013180' : rawPhoneId;
         return {
-          tenantId: docSnap.id,
+          tenantId: normalizeTenantId(data.tenantId || docSnap.id),
           name: data.name || 'Tenant ' + docSnap.id,
-          phoneNumberId: data.phoneNumberId,
-          wabaId: data.wabaId,
+          phoneNumberId: validPhoneId,
+          wabaId: data.wabaId || '2126714',
           permanentToken: data.permanentToken || data.accessToken,
           verifyToken: data.verifyToken
         };
@@ -181,10 +199,12 @@ async function findTenantByMetaIds(incomingPhoneId, incomingWabaId) {
       if (!querySnap.empty) {
         const docSnap = querySnap.docs[0];
         const data = docSnap.data();
+        const rawPhoneId = data.phoneNumberId;
+        const validPhoneId = (!rawPhoneId || rawPhoneId === '109823471092834') ? '1308538339013180' : rawPhoneId;
         return {
-          tenantId: docSnap.id,
+          tenantId: normalizeTenantId(data.tenantId || docSnap.id),
           name: data.name || 'Tenant ' + docSnap.id,
-          phoneNumberId: data.phoneNumberId,
+          phoneNumberId: validPhoneId,
           wabaId: data.wabaId,
           permanentToken: data.permanentToken || data.accessToken,
           verifyToken: data.verifyToken

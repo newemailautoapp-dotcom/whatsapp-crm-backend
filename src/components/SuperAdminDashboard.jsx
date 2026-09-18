@@ -165,13 +165,19 @@ export default function SuperAdminDashboard({ currentUser, onNavigateToInbox }) 
 
   const copyCredentials = () => {
     if (!successData) return;
-    const text = `🔑 WhatsApp CRM Client Account Details
+    const text = `🔑 WhatsApp CRM Client Account & Webhook Credentials
 -----------------------------------------
-Client Name: ${successData.name}
+Client / Org Name: ${successData.name}
 Tenant ID: ${successData.tenantId}
 Login Email: ${successData.email}
-Password: ${successData.password}
-Dashboard URL: https://whatsapp-crm-app-904e8.web.app
+Initial Password: ${successData.password}
+
+Dashboard Login URL: ${successData.loginUrl || 'https://whatsapp-crm-app-904e8.web.app'}
+Meta Webhook Callback URL: ${successData.webhookUrl || 'https://whatsapp-crm-backend-enzj.onrender.com/webhook'}
+Meta Webhook Verify Token: ${successData.verifyToken}
+
+Meta Phone Number ID: ${successData.phoneNumberId || '1308538339013180'}
+WhatsApp WABA ID: ${successData.wabaId || '2126714'}
 -----------------------------------------`;
 
     navigator.clipboard.writeText(text);
@@ -332,6 +338,22 @@ Dashboard URL: https://whatsapp-crm-app-904e8.web.app
               <div>
                 <span className="text-[#8696a0] block text-[10px]">PASSWORD</span>
                 <span className="text-amber-400 font-bold truncate block">{successData.password}</span>
+              </div>
+              <div>
+                <span className="text-[#8696a0] block text-[10px]">PHONE NUMBER ID</span>
+                <span className="text-[#e9edef] truncate block">{successData.phoneNumberId || '1308538339013180'}</span>
+              </div>
+              <div>
+                <span className="text-[#8696a0] block text-[10px]">WABA ID</span>
+                <span className="text-[#e9edef] truncate block">{successData.wabaId || '2126714'}</span>
+              </div>
+              <div>
+                <span className="text-[#8696a0] block text-[10px]">VERIFY TOKEN</span>
+                <span className="text-[#00a884] font-bold truncate block">{successData.verifyToken}</span>
+              </div>
+              <div>
+                <span className="text-[#8696a0] block text-[10px]">WEBHOOK CALLBACK URL</span>
+                <span className="text-[#00a884] truncate block font-bold">https://whatsapp-crm-backend-enzj.onrender.com/webhook</span>
               </div>
             </div>
           </div>
@@ -662,21 +684,27 @@ Dashboard URL: https://whatsapp-crm-app-904e8.web.app
 }
 
 function EditTenantModal({ tenant, onClose }) {
-  const [phoneNumberId, setPhoneNumberId] = useState(tenant.phoneNumberId || '');
-  const [wabaId, setWabaId] = useState(tenant.wabaId || '');
+  const [phoneNumberId, setPhoneNumberId] = useState(tenant.phoneNumberId || '1308538339013180');
+  const [wabaId, setWabaId] = useState(tenant.wabaId || '2126714');
   const [permanentToken, setPermanentToken] = useState(tenant.permanentToken || tenant.accessToken || '');
-  const [verifyToken, setVerifyToken] = useState(tenant.verifyToken || '');
+  const [verifyToken, setVerifyToken] = useState(tenant.verifyToken || `verify_token_${tenant.tenantId}_${Math.random().toString(36).substr(2, 6)}`);
   const [saving, setSaving] = useState(false);
+
+  const generateNewToken = () => {
+    const randomHex = Array.from(crypto.getRandomValues(new Uint8Array(8)))
+      .map(b => b.toString(16).padStart(2, '0')).join('');
+    setVerifyToken(`verify_token_${tenant.tenantId}_${randomHex}`);
+  };
 
   const handleSave = async (e) => {
     e.preventDefault();
     setSaving(true);
     try {
       await updateTenantConfig(tenant.tenantId, {
-        phoneNumberId,
-        wabaId,
+        phoneNumberId: phoneNumberId || '1308538339013180',
+        wabaId: wabaId || '2126714',
         permanentToken,
-        verifyToken,
+        verifyToken: verifyToken || `verify_token_${tenant.tenantId}`,
         name: tenant.name
       });
       onClose();
@@ -697,6 +725,7 @@ function EditTenantModal({ tenant, onClose }) {
               type="text"
               value={phoneNumberId}
               onChange={(e) => setPhoneNumberId(e.target.value)}
+              placeholder="1308538339013180"
               className="w-full bg-[#111b21] text-xs text-[#e9edef] border border-[#222d34] rounded-lg p-2.5 outline-none focus:border-[#00a884]"
             />
           </div>
@@ -707,6 +736,7 @@ function EditTenantModal({ tenant, onClose }) {
               type="text"
               value={wabaId}
               onChange={(e) => setWabaId(e.target.value)}
+              placeholder="2126714"
               className="w-full bg-[#111b21] text-xs text-[#e9edef] border border-[#222d34] rounded-lg p-2.5 outline-none focus:border-[#00a884]"
             />
           </div>
@@ -722,7 +752,16 @@ function EditTenantModal({ tenant, onClose }) {
           </div>
 
           <div>
-            <label className="text-xs text-[#8696a0] block mb-1">Webhook Verify Token</label>
+            <div className="flex items-center justify-between mb-1">
+              <label className="text-xs text-[#8696a0]">Webhook Verify Token</label>
+              <button
+                type="button"
+                onClick={generateNewToken}
+                className="text-[11px] text-[#00a884] hover:underline flex items-center gap-1 font-semibold"
+              >
+                <RefreshCw className="w-3 h-3" /> Generate Token
+              </button>
+            </div>
             <input 
               type="text"
               value={verifyToken}

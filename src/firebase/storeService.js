@@ -9,7 +9,9 @@ import {
   query, 
   orderBy, 
   serverTimestamp, 
-  getDoc 
+  getDoc,
+  getDocs,
+  where
 } from 'firebase/firestore';
 import { INITIAL_CONTACTS, INITIAL_MESSAGES } from '../data/mockContacts';
 
@@ -56,10 +58,10 @@ function saveStoredMessages(messages) {
 
 // Default Meta Config
 const DEFAULT_META_CONFIG = {
-  phoneNumberId: import.meta.env.VITE_META_PHONE_NUMBER_ID || '109823471092834',
-  wabaId: import.meta.env.VITE_META_WABA_ID || '992837410293847',
+  phoneNumberId: import.meta.env.VITE_META_PHONE_NUMBER_ID || '1308538339013180',
+  wabaId: import.meta.env.VITE_META_WABA_ID || '2126714',
   accessToken: import.meta.env.VITE_META_ACCESS_TOKEN || 'EAAG...demo_access_token',
-  verifyToken: import.meta.env.VITE_META_VERIFY_TOKEN || 'my_secure_token_123'
+  verifyToken: import.meta.env.VITE_META_VERIFY_TOKEN || 'whatsapp_crm_verify_token_2026'
 };
 
 export async function getStoredConfig(tenantId = DEFAULT_TENANT_ID) {
@@ -90,43 +92,109 @@ export async function getStoredConfig(tenantId = DEFAULT_TENANT_ID) {
 export async function ensureUserTenant(authUser) {
   if (!authUser || !authUser.uid) return { ...authUser, tenantId: DEFAULT_TENANT_ID };
 
+  const cleanEmail = (authUser.email || '').toLowerCase().trim();
+
+  // Super admin override
+  if (cleanEmail === 'sciencehasara@gmail.com') {
+    return {
+      ...authUser,
+      tenantId: 'system_admin',
+      role: 'super_admin'
+    };
+  }
+
   if (isLiveFirebase) {
     try {
+      // 1. Direct document check by uid
       const userRef = doc(db, 'users', authUser.uid);
       const userSnap = await getDoc(userRef);
 
       if (userSnap.exists() && userSnap.data()?.tenantId) {
+        const tenantId = userSnap.data().tenantId;
         return {
           ...authUser,
-          tenantId: userSnap.data().tenantId,
+          tenantId,
           name: userSnap.data().name || authUser.name || authUser.email?.split('@')[0] || 'Agent'
         };
       }
 
-      // Auto-provision default tenant 'usca_academy'
+      // 2. Secondary lookup in users collection by email
+      if (cleanEmail) {
+        const usersQ = query(collection(db, 'users'), where('email', '==', cleanEmail));
+        const usersSnap = await getDocs(usersQ);
+        if (!usersSnap.empty) {
+          const matchedUser = usersSnap.docs[0].data();
+          if (matchedUser.tenantId) {
+            await setDoc(userRef, {
+              uid: authUser.uid,
+              email: cleanEmail,
+              name: matchedUser.name || authUser.name || cleanEmail.split('@')[0],
+              tenantId: matchedUser.tenantId,
+              updatedAt: serverTimestamp()
+            }, { merge: true });
+
+            return {
+              ...authUser,
+              tenantId: matchedUser.tenantId,
+              name: matchedUser.name || authUser.name || cleanEmail.split('@')[0]
+            };
+          }
+        }
+
+        // 3. Lookup in tenants collection by clientEmail
+        const tenantsQ = query(collection(db, 'tenants'), where('clientEmail', '==', cleanEmail));
+        const tenantsSnap = await getDocs(tenantsQ);
+        if (!tenantsSnap.empty) {
+          const matchedTenant = tenantsSnap.docs[0].data();
+          const foundTenantId = matchedTenant.tenantId || tenantsSnap.docs[0].id;
+          await setDoc(userRef, {
+            uid: authUser.uid,
+            email: cleanEmail,
+            name: matchedTenant.name || cleanEmail.split('@')[0],
+            tenantId: foundTenantId,
+            role: 'client_admin',
+            createdAt: serverTimestamp()
+          }, { merge: true });
+
+          return {
+            ...authUser,
+            tenantId: foundTenantId,
+            name: matchedTenant.name || cleanEmail.split('@')[0]
+          };
+        }
+
+        // 4. Pattern check if email is admin@<slug>.com or <slug>@...
+        const emailSlug = cleanEmail.split('@')[0].replace(/^admin[_\.\-]?/, '');
+        if (emailSlug) {
+          const tenantRef = doc(db, 'tenants', emailSlug);
+          const tenantSnap = await getDoc(tenantRef);
+          if (tenantSnap.exists()) {
+            await setDoc(userRef, {
+              uid: authUser.uid,
+              email: cleanEmail,
+              name: tenantSnap.data().name || cleanEmail.split('@')[0],
+              tenantId: emailSlug,
+              role: 'client_admin',
+              createdAt: serverTimestamp()
+            }, { merge: true });
+
+            return {
+              ...authUser,
+              tenantId: emailSlug
+            };
+          }
+        }
+      }
+
+      // 5. Default fallback tenant 'usca_academy'
       const assignedTenantId = DEFAULT_TENANT_ID;
       await setDoc(userRef, {
         uid: authUser.uid,
-        email: authUser.email || '',
-        name: authUser.name || authUser.email?.split('@')[0] || 'Agent',
+        email: cleanEmail,
+        name: authUser.name || cleanEmail.split('@')[0] || 'Agent',
         tenantId: assignedTenantId,
         createdAt: serverTimestamp()
       }, { merge: true });
-
-      // Ensure tenant document exists
-      const tenantRef = doc(db, 'tenants', assignedTenantId);
-      const tenantSnap = await getDoc(tenantRef);
-      if (!tenantSnap.exists()) {
-        await setDoc(tenantRef, {
-          tenantId: assignedTenantId,
-          name: 'USCA Academy',
-          phoneNumberId: import.meta.env.VITE_META_PHONE_NUMBER_ID || '109823471092834',
-          wabaId: import.meta.env.VITE_META_WABA_ID || '992837410293847',
-          permanentToken: import.meta.env.VITE_META_ACCESS_TOKEN || '',
-          verifyToken: import.meta.env.VITE_META_VERIFY_TOKEN || 'my_secure_token_123',
-          createdAt: serverTimestamp()
-        });
-      }
 
       return {
         ...authUser,
@@ -550,8 +618,8 @@ export function subscribeToAllTenants(callback) {
           id: DEFAULT_TENANT_ID,
           tenantId: DEFAULT_TENANT_ID,
           name: 'USCA Academy',
-          phoneNumberId: import.meta.env.VITE_META_PHONE_NUMBER_ID || '109823471092834',
-          wabaId: import.meta.env.VITE_META_WABA_ID || '992837410293847',
+          phoneNumberId: import.meta.env.VITE_META_PHONE_NUMBER_ID || '1308538339013180',
+          wabaId: import.meta.env.VITE_META_WABA_ID || '2126714',
           status: 'active',
           createdAt: Date.now()
         }];
@@ -563,8 +631,8 @@ export function subscribeToAllTenants(callback) {
         id: DEFAULT_TENANT_ID,
         tenantId: DEFAULT_TENANT_ID,
         name: 'USCA Academy',
-        phoneNumberId: '109823471092834',
-        wabaId: '992837410293847',
+        phoneNumberId: '1308538339013180',
+        wabaId: '2126714',
         status: 'active'
       }]);
     });
@@ -574,8 +642,8 @@ export function subscribeToAllTenants(callback) {
     id: DEFAULT_TENANT_ID,
     tenantId: DEFAULT_TENANT_ID,
     name: 'USCA Academy',
-    phoneNumberId: '109823471092834',
-    wabaId: '992837410293847',
+    phoneNumberId: '1308538339013180',
+    wabaId: '2126714',
     status: 'active'
   }]);
 
@@ -593,11 +661,16 @@ export async function provisionNewTenant({
   verifyToken
 }) {
   const cleanTenantId = (tenantId || name.toLowerCase().replace(/[^a-z0-9]/g, '_')).trim();
+  const cleanEmail = (email || '').toLowerCase().trim();
+  const activePhoneNumberId = phoneNumberId || import.meta.env.VITE_META_PHONE_NUMBER_ID || '1308538339013180';
+  const activeWabaId = wabaId || import.meta.env.VITE_META_WABA_ID || '2126714';
+  const activeVerifyToken = verifyToken || `verify_token_${cleanTenantId}_${Math.random().toString(36).substr(2, 6)}`;
+
   let createdUid = null;
 
   // 1. Create client auth user via secondary app instance to avoid logging out super admin
   try {
-    const { initializeApp, getApps, getApp } = await import('firebase/app');
+    const { initializeApp, getApps } = await import('firebase/app');
     const { getAuth, createUserWithEmailAndPassword, signOut } = await import('firebase/auth');
 
     const firebaseConfig = {
@@ -613,7 +686,7 @@ export async function provisionNewTenant({
     const secondaryAuth = getAuth(secondaryApp);
 
     try {
-      const userCred = await createUserWithEmailAndPassword(secondaryAuth, email, password);
+      const userCred = await createUserWithEmailAndPassword(secondaryAuth, cleanEmail, password);
       createdUid = userCred.user.uid;
       await signOut(secondaryAuth);
     } catch (authErr) {
@@ -629,13 +702,14 @@ export async function provisionNewTenant({
   const tenantData = {
     tenantId: cleanTenantId,
     name,
-    clientEmail: email,
-    phoneNumberId,
-    wabaId,
-    permanentToken,
-    verifyToken,
+    clientEmail: cleanEmail,
+    phoneNumberId: activePhoneNumberId,
+    wabaId: activeWabaId,
+    permanentToken: permanentToken || '',
+    verifyToken: activeVerifyToken,
     status: 'active',
-    createdAt: serverTimestamp()
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp()
   };
 
   if (isLiveFirebase) {
@@ -645,11 +719,12 @@ export async function provisionNewTenant({
       if (createdUid) {
         await setDoc(doc(db, 'users', createdUid), {
           uid: createdUid,
-          email,
+          email: cleanEmail,
           name,
           tenantId: cleanTenantId,
           role: 'client_admin',
-          createdAt: serverTimestamp()
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp()
         }, { merge: true });
       }
     } catch (err) {
@@ -664,10 +739,10 @@ export async function provisionNewTenant({
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         tenantId: cleanTenantId,
-        phoneNumberId,
-        wabaId,
-        permanentToken,
-        verifyToken,
+        phoneNumberId: activePhoneNumberId,
+        wabaId: activeWabaId,
+        permanentToken: permanentToken || '',
+        verifyToken: activeVerifyToken,
         name
       })
     }).then(res => res.json()).then(data => {
@@ -680,10 +755,16 @@ export async function provisionNewTenant({
   return {
     success: true,
     tenantId: cleanTenantId,
-    email,
+    email: cleanEmail,
     password,
     name,
-    uid: createdUid
+    uid: createdUid,
+    phoneNumberId: activePhoneNumberId,
+    wabaId: activeWabaId,
+    permanentToken: permanentToken || '',
+    verifyToken: activeVerifyToken,
+    webhookUrl: 'https://whatsapp-crm-backend-enzj.onrender.com/webhook',
+    loginUrl: 'https://whatsapp-crm-app-904e8.web.app'
   };
 }
 
