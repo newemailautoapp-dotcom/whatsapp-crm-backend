@@ -165,24 +165,44 @@ export default function SuperAdminDashboard({ currentUser, onNavigateToInbox }) 
 
   const copyCredentials = () => {
     if (!successData) return;
-    const text = `🔑 WhatsApp CRM Client Account & Webhook Credentials
+    const text = `🔑 WhatsApp CRM Client Account Details
 -----------------------------------------
-Client / Org Name: ${successData.name}
-Tenant ID: ${successData.tenantId}
-Login Email: ${successData.email}
-Initial Password: ${successData.password}
+Client Name: ${successData.name || ''}
+Tenant ID: ${successData.tenantId || ''}
+Login Email: ${successData.email || ''}
+Password: ${successData.password || ''}
+Dashboard URL: https://whatsapp-crm-app-904e8.web.app
 
-Dashboard Login URL: ${successData.loginUrl || 'https://whatsapp-crm-app-904e8.web.app'}
-Meta Webhook Callback URL: ${successData.webhookUrl || 'https://whatsapp-crm-backend-enzj.onrender.com/webhook'}
-Meta Webhook Verify Token: ${successData.verifyToken}
-
-Meta Phone Number ID: ${successData.phoneNumberId || '1308538339013180'}
-WhatsApp WABA ID: ${successData.wabaId || '2126714'}
+Webhook Callback URL: https://whatsapp-crm-backend-enzj.onrender.com/webhook
+Webhook Verify Token: ${successData.verifyToken || verifyToken || ''}
+WhatsApp Phone Number ID: ${successData.phoneNumberId || '1308538339013180'}
+WhatsApp Business Account ID (WABA ID): ${successData.wabaId || '2126714958267893'}
 -----------------------------------------`;
 
     navigator.clipboard.writeText(text);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+  };
+
+  const handleCopyCredentials = copyCredentials;
+
+  const handleCopyTenantRow = (t) => {
+    const text = `🔑 WhatsApp CRM Client Account Details
+-----------------------------------------
+Client Name: ${t.name || ''}
+Tenant ID: ${t.tenantId || ''}
+Login Email: ${t.clientEmail || t.email || ''}
+Password: ${t.password || '[Preserved in Auth/Firestore]'}
+Dashboard URL: https://whatsapp-crm-app-904e8.web.app
+
+Webhook Callback URL: https://whatsapp-crm-backend-enzj.onrender.com/webhook
+Webhook Verify Token: ${t.verifyToken || 'whatsapp_crm_verify_token_2026'}
+WhatsApp Phone Number ID: ${t.phoneNumberId || '1308538339013180'}
+WhatsApp Business Account ID (WABA ID): ${t.wabaId || '2126714958267893'}
+-----------------------------------------`;
+
+    navigator.clipboard.writeText(text);
+    alert(`Copied full credentials and Webhook details for ${t.name || t.tenantId}!`);
   };
 
   const copyCallbackUrl = () => {
@@ -643,6 +663,14 @@ WhatsApp WABA ID: ${successData.wabaId || '2126714'}
                       </td>
                       <td className="p-3 text-right">
                         <div className="flex items-center justify-end gap-2 whitespace-nowrap">
+                          <button
+                            onClick={() => handleCopyTenantRow(t)}
+                            className="px-2.5 py-1.5 bg-[#00a884]/20 hover:bg-[#00a884]/30 text-[#00a884] border border-[#00a884]/30 text-xs font-bold rounded-lg transition-colors flex items-center gap-1"
+                            title="Copy full client credentials & Webhook setup"
+                          >
+                            <Copy className="w-3.5 h-3.5" />
+                            Copy
+                          </button>
                           <button
                             onClick={() => setEditingTenant(t)}
                             className="px-3 py-1.5 bg-[#2a3942] hover:bg-[#344652] text-xs text-[#e9edef] font-medium rounded-lg transition-colors flex items-center gap-1.5"
