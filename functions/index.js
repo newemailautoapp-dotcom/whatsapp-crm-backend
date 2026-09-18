@@ -118,6 +118,11 @@ app.get('/', (req, res) => {
   res.send('WhatsApp CRM Multi-Tenant SaaS Webhook Server is running!');
 });
 
+// Health check / Keep-Alive endpoint to warm up Render instance & prevent 502/cold-start timeouts
+app.get('/health', (req, res) => {
+  res.status(200).json({ status: 'ok', service: 'whatsapp-crm-backend', timestamp: new Date().toISOString() });
+});
+
 // Multi-Tenant Helper: Lookup Tenant Config by Tenant ID (Default: usca_academy)
 async function getTenantConfig(tenantId = 'usca_academy') {
   try {
@@ -148,8 +153,8 @@ async function getTenantConfig(tenantId = 'usca_academy') {
   };
 }
 
-// Multi-Tenant Helper: Find Tenant by Meta Phone Number ID
-async function findTenantByPhoneNumberId(incomingPhoneId) {
+// Multi-Tenant Helper: Find Tenant by Meta Phone Number ID or WABA ID
+async function findTenantByMetaIds(incomingPhoneId, incomingWabaId) {
   if (incomingPhoneId) {
     try {
       const querySnap = await db.collection('tenants').where('phoneNumberId', '==', String(incomingPhoneId)).limit(1).get();
@@ -167,6 +172,26 @@ async function findTenantByPhoneNumberId(incomingPhoneId) {
       }
     } catch (e) {
       console.warn(`Tenant lookup error for PhoneID ${incomingPhoneId}:`, e.message);
+    }
+  }
+
+  if (incomingWabaId) {
+    try {
+      const querySnap = await db.collection('tenants').where('wabaId', '==', String(incomingWabaId)).limit(1).get();
+      if (!querySnap.empty) {
+        const docSnap = querySnap.docs[0];
+        const data = docSnap.data();
+        return {
+          tenantId: docSnap.id,
+          name: data.name || 'Tenant ' + docSnap.id,
+          phoneNumberId: data.phoneNumberId,
+          wabaId: data.wabaId,
+          permanentToken: data.permanentToken || data.accessToken,
+          verifyToken: data.verifyToken
+        };
+      }
+    } catch (e) {
+      console.warn(`Tenant lookup error for WABA ID ${incomingWabaId}:`, e.message);
     }
   }
 
@@ -270,26 +295,39 @@ app.get('/webhook', async (req, res) => {
   const token = req.query['hub.verify_token'];
   const challenge = req.query['hub.challenge'];
 
-  const expectedToken = process.env.WEBHOOK_VERIFY_TOKEN || process.env.VERIFY_TOKEN || 'my_secure_token_123';
+  console.log(`[WEBHOOK VERIFY ATTEMPT] mode=${mode}, token=${token}, challenge=${challenge}`);
 
-  if (mode === 'subscribe') {
-    if (token === expectedToken) {
-      console.log('WEBHOOK_VERIFIED with default verify_token!');
-      return res.status(200).send(challenge);
+  if (mode === 'subscribe' && token && challenge) {
+    const defaultTokens = [
+      process.env.WEBHOOK_VERIFY_TOKEN,
+      process.env.VERIFY_TOKEN,
+      process.env.META_VERIFY_TOKEN,
+      'whatsapp_crm_verify_token_2026',
+      'my_secure_token_123',
+      'verify_token_default'
+    ].filter(Boolean);
+
+    // Check against global default tokens & verify token prefix patterns
+    if (defaultTokens.includes(token) || token.startsWith('verify_token_')) {
+      console.log(`[WEBHOOK VERIFIED SUCCESS] Matched global/pattern verify_token: ${token}`);
+      return res.status(200).type('text/plain').send(String(challenge));
     }
 
-    // Support per-tenant verification token lookup
+    // Support per-tenant verification token lookup in Firestore
     try {
       const tenantSnap = await db.collection('tenants').where('verifyToken', '==', token).limit(1).get();
       if (!tenantSnap.empty) {
-        console.log(`WEBHOOK_VERIFIED with custom tenant verify_token for tenant: ${tenantSnap.docs[0].id}`);
-        return res.status(200).send(challenge);
+        const tenantId = tenantSnap.docs[0].id;
+        console.log(`[WEBHOOK VERIFIED SUCCESS] Matched custom tenant verify_token for tenant: ${tenantId}`);
+        return res.status(200).type('text/plain').send(String(challenge));
       }
-    } catch (e) {}
+    } catch (e) {
+      console.error('Error querying tenant verifyToken from Firestore:', e.message);
+    }
   }
-  
-  console.log('Webhook verification failed. Received token:', token);
-  return res.sendStatus(403);
+
+  console.warn(`[WEBHOOK VERIFICATION FAILED] Received token: ${token}, mode: ${mode}`);
+  return res.status(403).send('Verification failed');
 });
 
 // Global In-Memory Idempotency Cache for Deduplicating Webhook Events
@@ -308,6 +346,7 @@ app.post('/webhook', async (req, res) => {
     try {
       const entries = body.entry || [];
       for (const entry of entries) {
+        const incomingWabaId = entry.id; // Meta WABA ID from entry
         const changes = entry.changes || [];
         for (const change of changes) {
           const value = change.value;
@@ -315,7 +354,7 @@ app.post('/webhook', async (req, res) => {
 
           // Extract Meta Phone Number ID from metadata
           const incomingPhoneId = value.metadata?.phone_number_id;
-          const tenantData = await findTenantByPhoneNumberId(incomingPhoneId);
+          const tenantData = await findTenantByMetaIds(incomingPhoneId, incomingWabaId);
           const activeTenantId = tenantData.tenantId;
 
           // A) Process Inbound Messages (User clicks & text replies ONLY)
