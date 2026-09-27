@@ -350,6 +350,26 @@ app.get('/webhook', async (req, res) => {
   return res.status(403).send('Verification failed');
 });
 
+// Helper to detect automated or bot responses to prevent bot-to-bot loops
+function isBotOrAutoReplyMessage(text) {
+  if (!text) return false;
+  const lower = String(text).toLowerCase();
+  const botPhrases = [
+    'thank you for contacting',
+    'thanks for contacting',
+    'automatic reply',
+    'auto-reply',
+    'autoreply',
+    'out of office',
+    'auto response',
+    'automated response',
+    'do not reply',
+    'autoresponder',
+    'this is an automated'
+  ];
+  return botPhrases.some(phrase => lower.includes(phrase));
+}
+
 // Global In-Memory Idempotency Cache for Deduplicating Webhook Events
 const processedMessageIds = new Set();
 
@@ -398,10 +418,10 @@ app.post('/webhook', async (req, res) => {
               const rawPhone = message.from; // Sender WhatsApp phone
               const cleanPhone = (rawPhone || '').replace(/^\+/, '');
               const mitchellPhone = (process.env.MITCHELL_PHONE || '971585687075').replace(/^\+/, '');
-              const businessPhone = (tenantData.phoneNumberId || process.env.WHATSAPP_PHONE_NUMBER_ID || '1293265723876318').replace(/^\+/, '');
+              const businessPhone = (tenantData.phoneNumberId || process.env.WHATSAPP_PHONE_NUMBER_ID || '1308538339013180').replace(/^\+/, '');
 
               // 2. SENDER GUARD: Completely ignore events originating from Mitchell's number or Business Sender ID
-              if (cleanPhone === mitchellPhone || cleanPhone === '971585687075' || cleanPhone === businessPhone || cleanPhone.includes('1293265723876318')) {
+              if (cleanPhone === mitchellPhone || cleanPhone === '971585687075' || cleanPhone === businessPhone || cleanPhone.includes('1308538339013180')) {
                 console.log(`[SENDER GUARD] Ignoring incoming webhook event/message from Mitchell or Business ID (${cleanPhone})`);
                 continue;
               }
@@ -479,6 +499,34 @@ app.post('/webhook', async (req, res) => {
               await legacyMessageRef.set(messageObj, { merge: true }).catch(() => {});
 
               console.log(`[TENANT: ${activeTenantId}] Inbound message saved for ${cleanPhone} (${profileName}): ${msgBody}`);
+
+              // 3. Automated Webhook Auto-Responder with Once-per-Lead Lock & Bot Loop Protection
+              const hasReceivedAutoReply = contactSnap.exists && contactSnap.data()?.hasReceivedAutoReply === true;
+              const isBotLoopMessage = isBotOrAutoReplyMessage(msgBody);
+
+              if (!hasReceivedAutoReply && !isBotLoopMessage) {
+                console.log(`[AUTO-RESPONDER] Triggering one-time direct line auto-reply for lead ${cleanPhone} (${profileName}) in tenant: ${activeTenantId}`);
+
+                // Mark flag immediately in Firestore to lock & prevent duplicate triggers/spam
+                await tenantContactRef.set({ hasReceivedAutoReply: true }, { merge: true }).catch(() => {});
+                await legacyContactRef.set({ hasReceivedAutoReply: true }, { merge: true }).catch(() => {});
+
+                const autoReplyBody = `Hi! I am ready to assist you right away. \n\nTo get the fastest response and direct support, please reach out to my direct WhatsApp line:\n+1 905-232-0411\n\nLooking forward to connecting with you!`;
+
+                await dispatchOutboundWhatsAppMessage({
+                  tenantId: activeTenantId,
+                  phone: cleanPhone,
+                  body: autoReplyBody,
+                  type: 'text'
+                });
+              } else {
+                if (hasReceivedAutoReply) {
+                  console.log(`[AUTO-RESPONDER GUARD] Lead ${cleanPhone} has already received auto-reply lock (hasReceivedAutoReply: true). Skipping.`);
+                }
+                if (isBotLoopMessage) {
+                  console.log(`[AUTO-RESPONDER GUARD] Incoming message from ${cleanPhone} matched bot/auto-reply pattern ("${msgBody}"). Skipping to prevent bot loop.`);
+                }
+              }
 
               // Automated Trigger Check for "get investment details" (case-insensitive)
               const incomingText = `${msgBody || ''} ${buttonPayload || ''}`.toLowerCase();
