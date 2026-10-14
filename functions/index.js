@@ -383,9 +383,11 @@ const ADMISSIONS_FALLBACK_REPLY = `Thank you for contacting USCA Academy Admissi
 
 async function generateGeminiAdmissionsReply({ userMessage, chatHistory = [] }) {
   const modelsToTry = [
+    'gemini-3.5-flash-lite',
+    'gemini-flash-lite-latest',
     'gemini-3.8-flash',
-    'gemini-flash-latest',
-    'gemini-2.5-flash-lite'
+    'gemini-3.5-flash',
+    'gemini-flash-latest'
   ];
 
   // Build contents payload including recent chat history context
@@ -421,7 +423,7 @@ async function generateGeminiAdmissionsReply({ userMessage, chatHistory = [] }) 
         },
         {
           headers: { 'Content-Type': 'application/json' },
-          timeout: 10000
+          timeout: 7000
         }
       );
 
