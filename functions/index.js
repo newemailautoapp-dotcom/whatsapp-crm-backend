@@ -377,9 +377,38 @@ function isBotOrAutoReplyMessage(text) {
 const DEFAULT_GEMINI_KEY = ['AQ.Ab8RN6JVcNLny', 'BGL4vlN_AVjcj8pIt', 'zpqes8hw-wP-D2Jcqxbg'].join('');
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || DEFAULT_GEMINI_KEY;
 
-const ADMISSIONS_SYSTEM_INSTRUCTION = `You are the official 24/7 AI Admissions Assistant for USCA Academy International School in Ontario, Canada. Warmly greet leads, answer basic questions about OSSD (Grades 9-12), university prep, and visa support. Keep responses concise (2-3 sentences), professional, and suited for WhatsApp. If they inquire about complex tuition fees or want to speak to an advisor, direct them to our admissions line: +1905-232-0411 or ask for their student grade and email. Reply in the user's language (English, Spanish, Vietnamese, etc.).`;
+// ----------------------------------------------------------------------
+// USCA Academy Partnership & Admissions Message Templates
+// ----------------------------------------------------------------------
+const USCA_PARTNERSHIP_GREETING = `Hello! Welcome to USCA Academy International School in Ontario, Canada.\n\nIf you are reaching out for School Partnerships or would like to receive our official Partnership Deck, please share your organization/school name and official email address.\n\nFor admissions, student enrollment (Grades 9–12), or immediate inquiries, you can also reach our admissions team directly at +1-905-232-0411.`;
 
-const ADMISSIONS_FALLBACK_REPLY = `Thank you for contacting USCA Academy Admissions. We are ready to assist you! For immediate assistance and detailed program information, please reach out directly to our admissions advisor on WhatsApp at +1905-232-0411.`;
+const USCA_PARTNERSHIP_DECK_PROMPT = `Thank you for your interest in partnering with USCA Academy! 🤝\n\nTo receive our official Partnership Deck, please share your agency/school name and official email address.\n\nFor admissions, student enrollment (Grades 9–12), or immediate inquiries, you can also reach our admissions team directly at +1-905-232-0411.`;
+
+const USCA_LEAD_CAPTURE_ACK = `Thank you for sharing your details! We have safely received your information.\n\nOur Partnership Team will review your inquiry and connect with you shortly with the official Partnership Deck.\n\nFor admissions, student enrollment (Grades 9–12), or immediate assistance, you can also reach our team directly at +1-905-232-0411.`;
+
+const ADMISSIONS_FALLBACK_REPLY = USCA_PARTNERSHIP_GREETING;
+
+const ADMISSIONS_SYSTEM_INSTRUCTION = `You are the official 24/7 AI Admissions & Partnerships Representative for USCA Academy International School in Ontario, Canada.
+
+CORE BEHAVIOR RULES:
+1. GREETINGS & INITIAL CONTACT:
+When a user sends a greeting (e.g. "Hi", "Hey", "Hello", "Good morning") or starts a new conversation, DO NOT send a generic OSSD/Visa prompt. Instead, send an opening message that prioritizes Institutional Partnerships and lead capture:
+"Hello! Welcome to USCA Academy International School in Ontario, Canada.
+
+If you are reaching out for School Partnerships or would like to receive our official Partnership Deck, please share your organization/school name and official email address.
+
+For admissions, student enrollment (Grades 9–12), or immediate inquiries, you can also reach our admissions team directly at +1-905-232-0411."
+
+2. PARTNERSHIP DECK INQUIRIES:
+When "Request Partnership Deck" or an inquiry for the Partnership Deck is triggered, promptly ask for their agency/school name and official email address, and provide +1-905-232-0411.
+
+3. FOLLOW-UP LEAD CAPTURE:
+When the user replies with their details (such as email, school/organization name, or phone number), acknowledge receipt professionally and confirm that the partnership team will connect shortly, without repeating unnecessary AI prompts or asking them again.
+
+4. ADMISSIONS & GENERAL INQUIRIES:
+If the user asks specific questions about admissions, OSSD (Grades 9–12), university prep, or visa support, provide concise (2-3 sentences), professional answers suited for WhatsApp. Direct complex tuition inquiries or immediate advisor requests to +1-905-232-0411.
+
+5. Always respond politely in the user's language (English, Spanish, Vietnamese, etc.).`;
 
 async function generateGeminiAdmissionsReply({ userMessage, chatHistory = [] }) {
   const modelsToTry = [
@@ -571,15 +600,116 @@ app.post('/webhook', async (req, res) => {
 
               console.log(`[TENANT: ${activeTenantId}] Inbound message saved for ${cleanPhone} (${profileName}): ${msgBody}`);
 
-              // 3. 24/7 Automated Gemini AI Admissions Chatbot with Bot Loop & Outbound Protection
+              // 3. 24/7 Automated USCA Partnerships & AI Admissions Bot with Loop & Outbound Protection
               const isBotLoopMessage = isBotOrAutoReplyMessage(msgBody);
-              const incomingText = `${msgBody || ''} ${buttonPayload || ''}`.toLowerCase();
-              const isKeywordTrigger = incomingText.includes('get investment details') ||
-                                       incomingText.includes('pre register') ||
-                                       incomingText.includes('pre-register') ||
-                                       incomingText.includes('preregister');
+              const incomingText = `${msgBody || ''} ${buttonPayload || ''}`.toLowerCase().trim();
+              const cleanBody = (msgBody || '').trim().toLowerCase();
 
-              if (!isBotLoopMessage && !isKeywordTrigger && msgBody && !msgBody.startsWith('[')) {
+              // Rule 1: "Request Partnership Deck" Button / Trigger Handling
+              const isPartnershipDeckTrigger = incomingText.includes('partnership deck') ||
+                                               incomingText.includes('request partnership deck') ||
+                                               incomingText.includes('partner deck') ||
+                                               (incomingText.includes('partnership') && (incomingText.includes('deck') || incomingText.includes('request')));
+
+              // Rule 2: Follow-up Lead Capture (User provides email or contact details)
+              const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/;
+              const emailMatch = msgBody ? msgBody.match(emailRegex) : null;
+              const isEmailLeadCapture = Boolean(emailMatch);
+
+              // Rule 3: General Greetings (e.g., "Hi", "Hey", "Hello", "Good morning")
+              const isGeneralGreeting = /^(hi+|hello+|hey+|hola|greetings|good\s*(morning|afternoon|evening)|start|help|info)[\s!.,?]*$/i.test(cleanBody);
+
+              // Legacy trigger checks
+              const isInvestmentTrigger = incomingText.includes('get investment details');
+              const isPreRegisterTrigger = incomingText.includes('pre register') ||
+                                           incomingText.includes('pre-register') ||
+                                           incomingText.includes('preregister');
+
+              if (isBotLoopMessage) {
+                console.log(`[BOT LOOP GUARD] Incoming message from ${cleanPhone} matched bot/auto-reply pattern ("${msgBody}"). Skipping.`);
+              } else if (isPartnershipDeckTrigger) {
+                // Requirement 2: Button / Quick Reply handling for "Request Partnership Deck"
+                console.log(`[PARTNERSHIP DECK TRIGGER] Triggered for lead ${cleanPhone} (${profileName})`);
+                await dispatchOutboundWhatsAppMessage({
+                  tenantId: activeTenantId,
+                  phone: cleanPhone,
+                  body: USCA_PARTNERSHIP_DECK_PROMPT,
+                  type: 'text'
+                });
+              } else if (isEmailLeadCapture) {
+                // Requirement 3: Follow-up Lead Capture (User provides email / details)
+                const capturedEmail = emailMatch[0];
+                console.log(`[LEAD CAPTURE] Captured email ${capturedEmail} from lead ${cleanPhone} (${profileName})`);
+
+                // Update contact document with captured email and tags
+                await tenantContactRef.set({
+                  email: capturedEmail,
+                  leadRating: 'Warm Lead',
+                  tags: ['Partnership Lead', 'Lead Captured'],
+                  hasSubmittedPartnershipDetails: true,
+                  lastLeadCaptureTimestamp: admin.firestore.Timestamp.now()
+                }, { merge: true }).catch(() => {});
+
+                // Acknowledge receipt professionally without repeating unnecessary AI prompts
+                await dispatchOutboundWhatsAppMessage({
+                  tenantId: activeTenantId,
+                  phone: cleanPhone,
+                  body: USCA_LEAD_CAPTURE_ACK,
+                  type: 'text'
+                });
+
+                // Dispatch instant email alert to admin/Mitchell
+                sendLeadEmailNotification({
+                  leadName: `${profileName} [Partnership Lead - ${capturedEmail}]`,
+                  leadPhone: `${cleanPhone} (Email: ${capturedEmail})`
+                }).catch(() => {});
+              } else if (isGeneralGreeting) {
+                // Requirement 1: Greeting / Inbound Fallback Behavior
+                console.log(`[GREETING TRIGGER] User sent greeting "${msgBody}". Sending official partnership opening message to ${cleanPhone}`);
+                await dispatchOutboundWhatsAppMessage({
+                  tenantId: activeTenantId,
+                  phone: cleanPhone,
+                  body: USCA_PARTNERSHIP_GREETING,
+                  type: 'text'
+                });
+              } else if (isInvestmentTrigger) {
+                console.log(`Triggering automated Yas Island investment details reply for ${cleanPhone}`);
+                const autoReplyText = `Thanks for your interest in Yas Island! 🌴\n\nWe’ve received your response — one of our specialists will contact you shortly with full investment details.\n\nTo help us tailor the best options, feel free to share your budget, and preferred unit type below 🤝`;
+
+                await dispatchOutboundWhatsAppMessage({
+                  tenantId: activeTenantId,
+                  phone: cleanPhone,
+                  body: autoReplyText,
+                  type: 'text'
+                });
+              } else if (isPreRegisterTrigger) {
+                console.log(`Triggering automated Sei Saadiyat Pre Register reply & single WhatsApp lead alert to Mitchell (${mitchellPhone}) for lead ${cleanPhone} (${profileName})`);
+
+                const seiSaadiyatAutoReply = `Thank you for your interest in Sei Saadiyat. \n\nYour pre-registration has been successfully received. \n\nOur Co-Founder, Mitchell, will be handling your inquiry directly. You can also connect with him immediately via WhatsApp or call for priority allocations, floor plans, and pricing details:\n\n📱 Direct Line: +971 58 568 7075\n\nWe look forward to assisting you.`;
+
+                const mitchellLeadNotification = `🚨 *New Lead Captured!*\nTenant: ${tenantData.name}\nName: ${profileName || 'Valued Lead'}\nPhone: +${cleanPhone}\nWhatsApp Link: https://wa.me/${cleanPhone}`;
+
+                // Fire outbound responses concurrently
+                await Promise.all([
+                  dispatchOutboundWhatsAppMessage({
+                    tenantId: activeTenantId,
+                    phone: cleanPhone,
+                    body: seiSaadiyatAutoReply,
+                    type: 'text'
+                  }),
+                  dispatchOutboundWhatsAppMessage({
+                    tenantId: activeTenantId,
+                    phone: mitchellPhone,
+                    body: mitchellLeadNotification,
+                    type: 'text'
+                  }),
+                  sendLeadEmailNotification({
+                    leadName: profileName,
+                    leadPhone: cleanPhone
+                  })
+                ]);
+              } else if (msgBody && !msgBody.startsWith('[')) {
+                // Requirement 4: Dynamic AI Admissions & Partnerships Inquiries
                 try {
                   console.log(`[GEMINI CHATBOT] Generating 24/7 AI response for ${cleanPhone} in tenant: ${activeTenantId}...`);
 
@@ -624,52 +754,6 @@ app.post('/webhook', async (req, res) => {
                 } catch (aiErr) {
                   console.error(`[GEMINI CHATBOT ERROR] Failed to process AI reply for ${cleanPhone}:`, aiErr.message);
                 }
-              } else {
-                if (isBotLoopMessage) {
-                  console.log(`[GEMINI CHATBOT GUARD] Incoming message from ${cleanPhone} matched bot/auto-reply pattern ("${msgBody}"). Skipping to prevent loop.`);
-                }
-              }
-
-              // Automated Trigger Check for "get investment details" (case-insensitive)
-              if (incomingText.includes('get investment details')) {
-                console.log(`Triggering automated Yas Island investment details reply for ${cleanPhone}`);
-                const autoReplyText = `Thanks for your interest in Yas Island! 🌴\n\nWe’ve received your response — one of our specialists will contact you shortly with full investment details.\n\nTo help us tailor the best options, feel free to share your budget, and preferred unit type below 🤝`;
-
-                await dispatchOutboundWhatsAppMessage({
-                  tenantId: activeTenantId,
-                  phone: cleanPhone,
-                  body: autoReplyText,
-                  type: 'text'
-                });
-              }
-
-              // Automated Trigger Check for "Pre Register" (case-insensitive)
-              if (incomingText.includes('pre register') || incomingText.includes('pre-register') || incomingText.includes('preregister')) {
-                console.log(`Triggering automated Sei Saadiyat Pre Register reply & single WhatsApp lead alert to Mitchell (${mitchellPhone}) for lead ${cleanPhone} (${profileName})`);
-
-                const seiSaadiyatAutoReply = `Thank you for your interest in Sei Saadiyat. \n\nYour pre-registration has been successfully received. \n\nOur Co-Founder, Mitchell, will be handling your inquiry directly. You can also connect with him immediately via WhatsApp or call for priority allocations, floor plans, and pricing details:\n\n📱 Direct Line: +971 58 568 7075\n\nWe look forward to assisting you.`;
-
-                const mitchellLeadNotification = `🚨 *New Lead Captured!*\nTenant: ${tenantData.name}\nName: ${profileName || 'Valued Lead'}\nPhone: +${cleanPhone}\nWhatsApp Link: https://wa.me/${cleanPhone}`;
-
-                // Fire outbound responses concurrently
-                await Promise.all([
-                  dispatchOutboundWhatsAppMessage({
-                    tenantId: activeTenantId,
-                    phone: cleanPhone,
-                    body: seiSaadiyatAutoReply,
-                    type: 'text'
-                  }),
-                  dispatchOutboundWhatsAppMessage({
-                    tenantId: activeTenantId,
-                    phone: mitchellPhone,
-                    body: mitchellLeadNotification,
-                    type: 'text'
-                  }),
-                  sendLeadEmailNotification({
-                    leadName: profileName,
-                    leadPhone: cleanPhone
-                  })
-                ]);
               }
             }
           }
