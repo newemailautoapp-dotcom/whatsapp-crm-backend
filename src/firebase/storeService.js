@@ -296,17 +296,26 @@ export function subscribeToMessages(tenantId, phone, callback) {
     // Query without orderBy constraint so Firestore never omits documents or throws index errors
     const primaryRef = collection(db, 'tenants', activeTenantId, 'contacts', cleanPhone, 'messages');
     
+    let isDisposed = false;
     let isFallbackActive = false;
     let fallbackUnsubscribe = null;
 
+    const safeCallback = (data) => {
+      if (!isDisposed) {
+        callback(data);
+      }
+    };
+
     const primaryUnsubscribe = onSnapshot(primaryRef, (snapshot) => {
+      if (isDisposed) return;
+
       if (!snapshot.empty) {
         isFallbackActive = false;
         if (fallbackUnsubscribe) {
-          fallbackUnsubscribe();
+          try { fallbackUnsubscribe(); } catch (e) {}
           fallbackUnsubscribe = null;
         }
-        callback(processSnapshot(snapshot.docs));
+        safeCallback(processSnapshot(snapshot.docs));
         return;
       }
 
@@ -317,48 +326,73 @@ export function subscribeToMessages(tenantId, phone, callback) {
       if (!isFallbackActive) {
         isFallbackActive = true;
         const legacyRef = collection(db, 'chats', cleanPhone, 'messages');
-        fallbackUnsubscribe = onSnapshot(legacyRef, (legSnap) => {
+        const legacyUnsub = onSnapshot(legacyRef, (legSnap) => {
+          if (isDisposed) return;
           if (!legSnap.empty) {
-            callback(processSnapshot(legSnap.docs));
+            safeCallback(processSnapshot(legSnap.docs));
           } else if (rawPhone !== cleanPhone) {
             const altRef = collection(db, 'tenants', activeTenantId, 'contacts', rawPhone, 'messages');
             getDocs(altRef).then(altSnap => {
+              if (isDisposed) return;
               if (!altSnap.empty) {
-                callback(processSnapshot(altSnap.docs));
+                safeCallback(processSnapshot(altSnap.docs));
               } else {
                 const allMsgs = getStoredMessages();
-                callback(allMsgs[cleanPhone] || allMsgs[rawPhone] || []);
+                safeCallback(allMsgs[cleanPhone] || allMsgs[rawPhone] || []);
               }
             }).catch(() => {
+              if (isDisposed) return;
               const allMsgs = getStoredMessages();
-              callback(allMsgs[cleanPhone] || allMsgs[rawPhone] || []);
+              safeCallback(allMsgs[cleanPhone] || allMsgs[rawPhone] || []);
             });
           } else {
             const allMsgs = getStoredMessages();
-            callback(allMsgs[cleanPhone] || allMsgs[rawPhone] || []);
+            safeCallback(allMsgs[cleanPhone] || allMsgs[rawPhone] || []);
           }
         }, () => {
+          if (isDisposed) return;
           const allMsgs = getStoredMessages();
-          callback(allMsgs[cleanPhone] || allMsgs[rawPhone] || []);
+          safeCallback(allMsgs[cleanPhone] || allMsgs[rawPhone] || []);
         });
+
+        if (isDisposed) {
+          try { legacyUnsub(); } catch (e) {}
+        } else {
+          fallbackUnsubscribe = legacyUnsub;
+        }
       } else {
         const allMsgs = getStoredMessages();
-        callback(allMsgs[cleanPhone] || allMsgs[rawPhone] || []);
+        safeCallback(allMsgs[cleanPhone] || allMsgs[rawPhone] || []);
       }
     }, (err) => {
+      if (isDisposed) return;
       console.warn('Firestore primary messages query error, trying legacy fallback:', err);
       const legacyRef = collection(db, 'chats', cleanPhone, 'messages');
-      fallbackUnsubscribe = onSnapshot(legacyRef, (legSnap) => {
-        callback(processSnapshot(legSnap.docs));
+      const legacyUnsub = onSnapshot(legacyRef, (legSnap) => {
+        if (isDisposed) return;
+        safeCallback(processSnapshot(legSnap.docs));
       }, () => {
+        if (isDisposed) return;
         const allMsgs = getStoredMessages();
-        callback(allMsgs[cleanPhone] || allMsgs[rawPhone] || []);
+        safeCallback(allMsgs[cleanPhone] || allMsgs[rawPhone] || []);
       });
+
+      if (isDisposed) {
+        try { legacyUnsub(); } catch (e) {}
+      } else {
+        fallbackUnsubscribe = legacyUnsub;
+      }
     });
 
     return () => {
-      if (primaryUnsubscribe) primaryUnsubscribe();
-      if (fallbackUnsubscribe) fallbackUnsubscribe();
+      isDisposed = true;
+      if (primaryUnsubscribe) {
+        try { primaryUnsubscribe(); } catch (e) {}
+      }
+      if (fallbackUnsubscribe) {
+        try { fallbackUnsubscribe(); } catch (e) {}
+        fallbackUnsubscribe = null;
+      }
     };
   }
 
@@ -428,10 +462,12 @@ export async function sendOutboundMessage({ tenantId = DEFAULT_TENANT_ID, phone,
       });
 
       // Update tenant contact summary
+      const summaryMsg = type === 'template' ? (templateName ? `[Template] ${templateName}` : 'Template Sent') : body;
       const tenantContactRef = doc(db, 'tenants', activeTenantId, 'contacts', cleanPhone);
       await setDoc(tenantContactRef, {
         phone: cleanPhone,
-        lastMessage: type === 'template' ? `[Template] ${templateName}` : body,
+        status: 'sent',
+        lastMessage: summaryMsg,
         lastMessageTimestamp: serverTimestamp(),
         unreadCount: 0
       }, { merge: true });
@@ -442,7 +478,8 @@ export async function sendOutboundMessage({ tenantId = DEFAULT_TENANT_ID, phone,
       const legacyContactRef = doc(db, 'contacts', cleanPhone);
       await updateDoc(legacyContactRef, {
         phone: cleanPhone,
-        lastMessage: type === 'template' ? `[Template] ${templateName}` : body,
+        status: 'sent',
+        lastMessage: summaryMsg,
         lastMessageTimestamp: serverTimestamp(),
         unreadCount: 0
       }).catch(() => {});

@@ -351,11 +351,14 @@ async function dispatchOutboundWhatsAppMessage({ tenantId = 'usca_academy', phon
   const tenantMsgRef = db.collection('tenants').doc(activeTenantId).collection('contacts').doc(cleanPhone).collection('messages').doc(metaMsgId);
   await tenantMsgRef.set(msgObj, { merge: true }).catch(() => {});
 
+  const outboundSummary = type === 'template' ? (templateName ? `[Template] ${templateName}` : 'Template Sent') : body;
+
   // Update contact document in tenant collection
   const tenantContactRef = db.collection('tenants').doc(activeTenantId).collection('contacts').doc(cleanPhone);
   await tenantContactRef.set({
     phone: cleanPhone,
-    lastMessage: type === 'template' ? `[Template] ${templateName}` : body,
+    status: 'sent',
+    lastMessage: outboundSummary,
     lastMessageTimestamp: admin.firestore.Timestamp.fromMillis(nowMs),
     tenantId: activeTenantId
   }, { merge: true }).catch(() => {});
@@ -366,7 +369,8 @@ async function dispatchOutboundWhatsAppMessage({ tenantId = 'usca_academy', phon
   const contactRef = db.collection('contacts').doc(cleanPhone);
   await contactRef.set({
     phone: cleanPhone,
-    lastMessage: type === 'template' ? `[Template] ${templateName}` : body,
+    status: 'sent',
+    lastMessage: outboundSummary,
     lastMessageTimestamp: admin.firestore.Timestamp.fromMillis(nowMs)
   }, { merge: true }).catch(() => {});
 
@@ -861,12 +865,16 @@ app.post('/webhook', async (req, res) => {
                 }
 
                 try {
+                  const cleanPhone = (recipientPhone || '').replace(/^\+/, '').trim();
+                  const statusCapitalized = newStatus ? (newStatus.charAt(0).toUpperCase() + newStatus.slice(1)) : 'Sent';
+                  const statusSummary = `Template ${statusCapitalized}`;
+
                   // Direct atomic merge write to message document (Zero Firestore Reads!)
-                  const tenantMsgRef = db.collection('tenants').doc(activeTenantId).collection('contacts').doc(recipientPhone).collection('messages').doc(statusMessageId);
+                  const tenantMsgRef = db.collection('tenants').doc(activeTenantId).collection('contacts').doc(cleanPhone).collection('messages').doc(statusMessageId);
                   await tenantMsgRef.set({
                     id: statusMessageId,
                     from: 'business',
-                    to: recipientPhone,
+                    to: cleanPhone,
                     status: newStatus,
                     statusTimestamp: nowTimestamp,
                     direction: 'outbound',
@@ -874,16 +882,25 @@ app.post('/webhook', async (req, res) => {
                   }, { merge: true }).catch(() => {});
 
                   // Direct atomic merge write to contact document (Zero Firestore Reads!)
-                  const tenantContactRef = db.collection('tenants').doc(activeTenantId).collection('contacts').doc(recipientPhone);
+                  const tenantContactRef = db.collection('tenants').doc(activeTenantId).collection('contacts').doc(cleanPhone);
                   await tenantContactRef.set({
-                    phone: recipientPhone,
+                    phone: cleanPhone,
+                    status: newStatus,
+                    lastMessage: statusSummary,
                     lastMessageTimestamp: statusTime,
                     tenantId: activeTenantId
                   }, { merge: true }).catch(() => {});
 
                   // Legacy fallback status update
-                  const legacyMsgRef = db.collection('chats').doc(recipientPhone).collection('messages').doc(statusMessageId);
+                  const legacyMsgRef = db.collection('chats').doc(cleanPhone).collection('messages').doc(statusMessageId);
                   await legacyMsgRef.set({ status: newStatus, statusTimestamp: nowTimestamp }, { merge: true }).catch(() => {});
+                  const legacyContactRef = db.collection('contacts').doc(cleanPhone);
+                  await legacyContactRef.set({
+                    phone: cleanPhone,
+                    status: newStatus,
+                    lastMessage: statusSummary,
+                    lastMessageTimestamp: statusTime
+                  }, { merge: true }).catch(() => {});
                 } catch (err) {
                   console.warn(`Error updating status for ${statusMessageId}:`, err.message);
                 }

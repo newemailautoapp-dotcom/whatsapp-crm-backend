@@ -60,6 +60,18 @@ export default function ContactDetails({ contact, tenantId = 'usca_academy', onC
   const hoursLeft = is24hActive ? Math.max(0, Math.floor((contact.windowExpiry - now) / (1000 * 60 * 60))) : 0;
   const minsLeft = is24hActive ? Math.max(0, Math.floor(((contact.windowExpiry - now) % (1000 * 60 * 60)) / (1000 * 60))) : 0;
 
+  const cleanPhone = (contact.phone || '').replace(/^\+/, '').trim();
+  const formattedPhone = cleanPhone ? `+${cleanPhone}` : '';
+  const rawName = contact.name?.trim();
+  const isNameInvalid = !rawName || rawName === 'UN' || rawName.toLowerCase() === 'undefined' || rawName.toLowerCase() === 'unknown' || rawName.toLowerCase() === 'null';
+  const displayName = !isNameInvalid ? rawName : (formattedPhone ? `Lead ${formattedPhone}` : 'Valued Lead');
+  const avatarInitials = !isNameInvalid 
+    ? (rawName.split(' ').filter(Boolean).length >= 2 
+        ? (rawName.split(' ').filter(Boolean)[0][0] + rawName.split(' ').filter(Boolean)[1][0]).toUpperCase()
+        : rawName.slice(0, 2).toUpperCase())
+    : (cleanPhone ? cleanPhone.slice(-2) : 'WA');
+  const avatarSrc = contact.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(avatarInitials)}&background=00a884&color=fff`;
+
   return (
     <div className="w-80 md:w-88 bg-[#111b21] border-l border-[#222d34] h-full flex flex-col overflow-y-auto flex-shrink-0 animate-fade-in">
       {/* Top Bar */}
@@ -77,12 +89,12 @@ export default function ContactDetails({ contact, tenantId = 'usca_academy', onC
         {/* Profile Info Header */}
         <div className="flex flex-col items-center text-center pb-4 border-b border-[#222d34]">
           <img 
-            src={contact.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(contact.name)}&background=00a884&color=fff`}
-            alt={contact.name}
+            src={avatarSrc}
+            alt={displayName}
             className="w-20 h-20 rounded-full object-cover mb-3 border-2 border-[#00a884]"
           />
-          <h2 className="text-base font-bold text-[#e9edef]">{contact.name}</h2>
-          <p className="text-xs text-[#8696a0] mt-0.5 font-mono">+{contact.phone}</p>
+          <h2 className="text-base font-bold text-[#e9edef]">{displayName}</h2>
+          <p className="text-xs text-[#8696a0] mt-0.5 font-mono">{formattedPhone}</p>
         </div>
 
         {/* 24h Window Timer Widget & Trigger */}

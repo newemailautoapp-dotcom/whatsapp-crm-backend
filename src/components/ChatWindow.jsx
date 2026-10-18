@@ -128,19 +128,31 @@ export default function ChatWindow({
   const hoursLeft = is24hActive ? Math.max(0, Math.floor((contact.windowExpiry - now) / (1000 * 60 * 60))) : 0;
   const minsLeft = is24hActive ? Math.max(0, Math.floor(((contact.windowExpiry - now) % (1000 * 60 * 60)) / (1000 * 60))) : 0;
 
+  const cleanPhone = (contact.phone || '').replace(/^\+/, '').trim();
+  const formattedPhone = cleanPhone ? `+${cleanPhone}` : '';
+  const rawName = contact.name?.trim();
+  const isNameInvalid = !rawName || rawName === 'UN' || rawName.toLowerCase() === 'undefined' || rawName.toLowerCase() === 'unknown' || rawName.toLowerCase() === 'null';
+  const displayName = !isNameInvalid ? rawName : (formattedPhone ? `Lead ${formattedPhone}` : 'Valued Lead');
+  const avatarInitials = !isNameInvalid 
+    ? (rawName.split(' ').filter(Boolean).length >= 2 
+        ? (rawName.split(' ').filter(Boolean)[0][0] + rawName.split(' ').filter(Boolean)[1][0]).toUpperCase()
+        : rawName.slice(0, 2).toUpperCase())
+    : (cleanPhone ? cleanPhone.slice(-2) : 'WA');
+  const avatarSrc = contact.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(avatarInitials)}&background=00a884&color=fff`;
+
   return (
     <div className="flex-1 flex flex-col bg-[#0b141a] chat-pattern h-full min-w-0 border-r border-[#222d34] relative">
       {/* Header */}
       <div className="h-16 bg-[#202c33] px-4 flex items-center justify-between border-b border-[#222d34] flex-shrink-0">
         <div className="flex items-center gap-3 min-w-0">
           <img 
-            src={contact.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(contact.name)}&background=00a884&color=fff`}
-            alt={contact.name}
+            src={avatarSrc}
+            alt={displayName}
             className="w-10 h-10 rounded-full object-cover flex-shrink-0"
           />
           <div className="min-w-0">
-            <h2 className="text-sm font-semibold text-[#e9edef] truncate">{contact.name}</h2>
-            <p className="text-xs text-[#8696a0] truncate">+{contact.phone}</p>
+            <h2 className="text-sm font-semibold text-[#e9edef] truncate">{displayName}</h2>
+            <p className="text-xs text-[#8696a0] truncate">{formattedPhone}</p>
           </div>
         </div>
 
@@ -216,8 +228,8 @@ export default function ChatWindow({
                       : 'bg-[#202c33] text-[#e9edef] rounded-tl-none'
                   }`}
                 >
-                  {/* Template Header Badge if message is template */}
-                  {msg.type === 'template' && (
+                  {/* Template Header Badge if message is template or outbound template */}
+                  {(msg.type === 'template' || (!msg.body && isOutbound)) && (
                     <div className="mb-1.5 pb-1 border-b border-white/10 flex items-center justify-between text-[11px] font-semibold text-[#00a884]">
                       <span className="flex items-center gap-1">
                         <Sparkles className="w-3 h-3" />
@@ -234,8 +246,13 @@ export default function ChatWindow({
                     </div>
                   )}
 
-                  {/* Message Body */}
-                  <p className="whitespace-pre-wrap break-words leading-relaxed">{msg.body}</p>
+                  {/* Message Body with Safe Fallback for Empty Templates */}
+                  <p className="whitespace-pre-wrap break-words leading-relaxed">
+                    {msg.body || msg.text || msg.caption || 
+                      (msg.type === 'template' 
+                        ? (msg.templateName ? `[Template: ${msg.templateName}]` : '[Template Message Sent]') 
+                        : (isOutbound ? '[Template Message Sent]' : '[Message Content Unavailable]'))}
+                  </p>
 
                   {/* Footer Timestamp & Delivery Status Ticks */}
                   <div className="flex items-center justify-end gap-1 text-[10px] text-[#8696a0] mt-1 float-right ml-4">

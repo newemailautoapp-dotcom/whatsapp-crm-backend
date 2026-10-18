@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useLayoutEffect } from 'react';
 import { 
   Search, 
   MessageSquarePlus, 
@@ -60,11 +60,63 @@ export default function Sidebar({
     }
   };
 
+  const scrollContainerRef = useRef(null);
+  const scrollPosRef = useRef(0);
+
+  const handleScroll = (e) => {
+    scrollPosRef.current = e.currentTarget.scrollTop;
+  };
+
+  useLayoutEffect(() => {
+    if (scrollContainerRef.current && scrollPosRef.current) {
+      scrollContainerRef.current.scrollTop = scrollPosRef.current;
+    }
+  }, [contacts, selectedContact]);
+
+  const getContactDisplayName = (contact) => {
+    const cleanPhone = (contact.phone || '').replace(/^\+/, '').trim();
+    const formattedPhone = cleanPhone ? `+${cleanPhone}` : '';
+    const rawName = contact.name?.trim();
+    const isInvalid = !rawName || rawName === 'UN' || rawName.toLowerCase() === 'undefined' || rawName.toLowerCase() === 'unknown' || rawName.toLowerCase() === 'null';
+    if (!isInvalid) return rawName;
+    if (formattedPhone) return `Lead ${formattedPhone}`;
+    return 'Valued Lead';
+  };
+
+  const getContactAvatarInitials = (contact) => {
+    const cleanPhone = (contact.phone || '').replace(/^\+/, '').trim();
+    const rawName = contact.name?.trim();
+    const isInvalid = !rawName || rawName === 'UN' || rawName.toLowerCase() === 'undefined' || rawName.toLowerCase() === 'unknown' || rawName.toLowerCase() === 'null';
+    if (!isInvalid) {
+      const parts = rawName.split(' ').filter(Boolean);
+      if (parts.length >= 2) {
+        return (parts[0][0] + parts[1][0]).toUpperCase();
+      }
+      return rawName.slice(0, 2).toUpperCase();
+    }
+    if (cleanPhone) return cleanPhone.slice(-2);
+    return 'WA';
+  };
+
+  const getContactLastMessage = (contact) => {
+    if (contact.lastMessage && contact.lastMessage.trim() && contact.lastMessage !== 'No messages yet') {
+      return contact.lastMessage;
+    }
+    if (contact.status) {
+      const s = contact.status.toLowerCase();
+      return `Template ${s.charAt(0).toUpperCase() + s.slice(1)}`;
+    }
+    return 'Template Sent';
+  };
+
   // Filter contacts based on active tab and search query
   const filteredContacts = contacts.filter(contact => {
+    const displayName = getContactDisplayName(contact);
+    const lastMsg = getContactLastMessage(contact);
     const matchesSearch = 
-      contact.name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      contact.phone?.includes(searchQuery);
+      displayName.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (contact.phone && contact.phone.includes(searchQuery)) ||
+      (lastMsg && lastMsg.toLowerCase().includes(searchQuery.toLowerCase()));
 
     if (!matchesSearch) return false;
 
@@ -178,7 +230,11 @@ export default function Sidebar({
       </div>
 
       {/* Contacts List */}
-      <div className="flex-1 overflow-y-auto">
+      <div 
+        ref={scrollContainerRef}
+        onScroll={handleScroll}
+        className="flex-1 overflow-y-auto"
+      >
         {filteredContacts.length === 0 ? (
           <div className="p-8 text-center text-[#8696a0]">
             <p className="text-sm">No contacts found</p>
@@ -188,11 +244,20 @@ export default function Sidebar({
           filteredContacts.map(contact => {
             const isSelected = selectedContact?.phone === contact.phone;
             const hasUnread = (contact.unreadCount || 0) > 0;
+            const displayName = getContactDisplayName(contact);
+            const avatarInitials = getContactAvatarInitials(contact);
+            const avatarSrc = contact.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(avatarInitials)}&background=00a884&color=fff`;
+            const displayLastMsg = getContactLastMessage(contact);
 
             return (
               <div
                 key={contact.phone}
-                onClick={() => onSelectContact(contact)}
+                onClick={() => {
+                  if (scrollContainerRef.current) {
+                    scrollPosRef.current = scrollContainerRef.current.scrollTop;
+                  }
+                  onSelectContact(contact);
+                }}
                 className={`flex items-center px-3 py-3 gap-3 cursor-pointer border-b border-[#222d34]/40 transition-colors ${
                   isSelected ? 'bg-[#2a3942]' : 'hover:bg-[#202c33]'
                 }`}
@@ -200,8 +265,8 @@ export default function Sidebar({
                 {/* Contact Avatar & 24h status indicator dot */}
                 <div className="relative flex-shrink-0">
                   <img 
-                    src={contact.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(contact.name)}&background=00a884&color=fff`}
-                    alt={contact.name}
+                    src={avatarSrc}
+                    alt={displayName}
                     className="w-12 h-12 rounded-full object-cover"
                   />
                   {/* 24h Window dot: Green active, Red expired */}
@@ -217,7 +282,7 @@ export default function Sidebar({
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center justify-between mb-0.5">
                     <h3 className={`text-sm font-semibold truncate ${hasUnread ? 'text-[#e9edef]' : 'text-[#e9edef]/90'}`}>
-                      {contact.name || contact.phone}
+                      {displayName}
                     </h3>
                     <span className={`text-xs ${hasUnread ? 'text-[#00a884] font-semibold' : 'text-[#8696a0]'}`}>
                       {formatTime(contact.lastMessageTimestamp)}
@@ -226,7 +291,7 @@ export default function Sidebar({
 
                   <div className="flex items-center justify-between gap-1">
                     <p className={`text-xs truncate ${hasUnread ? 'text-[#e9edef] font-medium' : 'text-[#8696a0]'}`}>
-                      {contact.lastMessage || 'No messages yet'}
+                      {displayLastMsg}
                     </p>
 
                     {hasUnread && (

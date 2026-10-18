@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import Sidebar from './components/Sidebar';
 import ChatWindow from './components/ChatWindow';
 import ContactDetails from './components/ContactDetails';
@@ -96,24 +96,30 @@ function MainApp() {
     setCurrentRoute(routePath);
   };
 
-  // Subscribe to real-time contacts scoped to tenantId
+  const selectedContactRef = useRef(selectedContact);
+  useEffect(() => {
+    selectedContactRef.current = selectedContact;
+  }, [selectedContact]);
+
+  // Subscribe to real-time contacts scoped to tenantId (stable subscription across contact clicks)
   useEffect(() => {
     if (!currentUser || currentRoute !== 'inbox') return;
     const unsubscribe = subscribeToContacts(tenantId, (updatedContacts) => {
       setContacts(updatedContacts);
       
+      const currentSelected = selectedContactRef.current;
       // Auto-select first contact if none selected
-      if (updatedContacts.length > 0 && !selectedContact) {
+      if (updatedContacts.length > 0 && !currentSelected) {
         setSelectedContact(updatedContacts[0]);
-      } else if (selectedContact) {
-        // Keep selected contact reference fresh
-        const fresh = updatedContacts.find(c => c.phone === selectedContact.phone);
+      } else if (currentSelected) {
+        // Keep selected contact reference fresh without resetting contact list
+        const fresh = updatedContacts.find(c => c.phone === currentSelected.phone);
         if (fresh) setSelectedContact(fresh);
       }
     });
 
     return () => unsubscribe();
-  }, [currentUser, currentRoute, tenantId, selectedContact?.phone]);
+  }, [currentUser, currentRoute, tenantId]);
 
   // Subscribe to real-time messages for currently selected contact scoped to tenantId
   useEffect(() => {
