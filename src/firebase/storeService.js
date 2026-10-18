@@ -212,6 +212,7 @@ export async function ensureUserTenant(authUser) {
 }
 
 // ----------------------------------------------------
+// ----------------------------------------------------
 // Realtime Contacts Subscription (Multi-Tenant)
 // ----------------------------------------------------
 export function subscribeToContacts(tenantId, callback) {
@@ -219,16 +220,27 @@ export function subscribeToContacts(tenantId, callback) {
     callback = tenantId;
     tenantId = DEFAULT_TENANT_ID;
   }
-  tenantId = tenantId || DEFAULT_TENANT_ID;
+  const activeTenantId = (!tenantId || tenantId === 'system_admin') ? DEFAULT_TENANT_ID : tenantId;
 
   if (isLiveFirebase) {
-    const q = query(collection(db, 'tenants', tenantId, 'contacts'), orderBy('lastMessageTimestamp', 'desc'));
+    const q = query(collection(db, 'tenants', activeTenantId, 'contacts'), orderBy('lastMessageTimestamp', 'desc'));
     return onSnapshot(q, (snapshot) => {
-      const contacts = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      callback(contacts);
+      if (!snapshot.empty) {
+        const contacts = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        callback(contacts);
+      } else {
+        // Fallback to legacy root collection if tenant subcollection empty
+        const legacyQ = query(collection(db, 'contacts'), orderBy('lastMessageTimestamp', 'desc'));
+        getDocs(legacyQ).then((legacySnap) => {
+          if (!legacySnap.empty) {
+            callback(legacySnap.docs.map(d => ({ id: d.id, ...d.data() })));
+          } else {
+            callback(getStoredContacts());
+          }
+        }).catch(() => callback(getStoredContacts()));
+      }
     }, (err) => {
       console.warn('Firestore tenant contacts subscription fallback to local store:', err);
-      // Fallback to legacy root collection if tenant subcollection empty/error
       const legacyQ = query(collection(db, 'contacts'), orderBy('lastMessageTimestamp', 'desc'));
       return onSnapshot(legacyQ, (snap) => {
         callback(snap.docs.map(d => ({ id: d.id, ...d.data() })));
@@ -255,31 +267,105 @@ export function subscribeToMessages(tenantId, phone, callback) {
     phone = tenantId;
     tenantId = DEFAULT_TENANT_ID;
   }
-  tenantId = tenantId || DEFAULT_TENANT_ID;
+  const activeTenantId = (!tenantId || tenantId === 'system_admin') ? DEFAULT_TENANT_ID : tenantId;
 
-  if (!phone) return () => {};
+  if (!phone) {
+    callback([]);
+    return () => {};
+  }
+
+  const rawPhone = String(phone).trim();
+  const cleanPhone = rawPhone.replace(/^\+/, '');
 
   if (isLiveFirebase) {
-    const q = query(collection(db, 'tenants', tenantId, 'contacts', phone, 'messages'), orderBy('timestamp', 'asc'));
-    return onSnapshot(q, (snapshot) => {
-      const msgs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      callback(msgs);
+    const parseTime = (t) => {
+      if (!t) return 0;
+      if (typeof t.toMillis === 'function') return t.toMillis();
+      if (typeof t.seconds === 'number') return t.seconds * 1000;
+      if (typeof t === 'number') return t;
+      const parsed = new Date(t).getTime();
+      return isNaN(parsed) ? 0 : parsed;
+    };
+
+    const processSnapshot = (docs) => {
+      return docs
+        .map(doc => ({ id: doc.id, ...doc.data() }))
+        .sort((a, b) => parseTime(a.timestamp) - parseTime(b.timestamp));
+    };
+
+    // Query without orderBy constraint so Firestore never omits documents or throws index errors
+    const primaryRef = collection(db, 'tenants', activeTenantId, 'contacts', cleanPhone, 'messages');
+    
+    let isFallbackActive = false;
+    let fallbackUnsubscribe = null;
+
+    const primaryUnsubscribe = onSnapshot(primaryRef, (snapshot) => {
+      if (!snapshot.empty) {
+        isFallbackActive = false;
+        if (fallbackUnsubscribe) {
+          fallbackUnsubscribe();
+          fallbackUnsubscribe = null;
+        }
+        callback(processSnapshot(snapshot.docs));
+        return;
+      }
+
+      // If cleanPhone collection has no messages, check alternate paths:
+      // 1. chats/{cleanPhone}/messages (legacy root)
+      // 2. tenants/{activeTenantId}/contacts/{rawPhone}/messages (if rawPhone has +)
+      // 3. Local stored messages
+      if (!isFallbackActive) {
+        isFallbackActive = true;
+        const legacyRef = collection(db, 'chats', cleanPhone, 'messages');
+        fallbackUnsubscribe = onSnapshot(legacyRef, (legSnap) => {
+          if (!legSnap.empty) {
+            callback(processSnapshot(legSnap.docs));
+          } else if (rawPhone !== cleanPhone) {
+            const altRef = collection(db, 'tenants', activeTenantId, 'contacts', rawPhone, 'messages');
+            getDocs(altRef).then(altSnap => {
+              if (!altSnap.empty) {
+                callback(processSnapshot(altSnap.docs));
+              } else {
+                const allMsgs = getStoredMessages();
+                callback(allMsgs[cleanPhone] || allMsgs[rawPhone] || []);
+              }
+            }).catch(() => {
+              const allMsgs = getStoredMessages();
+              callback(allMsgs[cleanPhone] || allMsgs[rawPhone] || []);
+            });
+          } else {
+            const allMsgs = getStoredMessages();
+            callback(allMsgs[cleanPhone] || allMsgs[rawPhone] || []);
+          }
+        }, () => {
+          const allMsgs = getStoredMessages();
+          callback(allMsgs[cleanPhone] || allMsgs[rawPhone] || []);
+        });
+      } else {
+        const allMsgs = getStoredMessages();
+        callback(allMsgs[cleanPhone] || allMsgs[rawPhone] || []);
+      }
     }, (err) => {
-      console.warn('Firestore tenant messages fallback to legacy root chats:', err);
-      const legacyQ = query(collection(db, 'chats', phone, 'messages'), orderBy('timestamp', 'asc'));
-      return onSnapshot(legacyQ, (snap) => {
-        callback(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+      console.warn('Firestore primary messages query error, trying legacy fallback:', err);
+      const legacyRef = collection(db, 'chats', cleanPhone, 'messages');
+      fallbackUnsubscribe = onSnapshot(legacyRef, (legSnap) => {
+        callback(processSnapshot(legSnap.docs));
       }, () => {
         const allMsgs = getStoredMessages();
-        callback(allMsgs[phone] || []);
+        callback(allMsgs[cleanPhone] || allMsgs[rawPhone] || []);
       });
     });
+
+    return () => {
+      if (primaryUnsubscribe) primaryUnsubscribe();
+      if (fallbackUnsubscribe) fallbackUnsubscribe();
+    };
   }
 
   // Local demo mode
   const handler = () => {
     const allMsgs = getStoredMessages();
-    callback(allMsgs[phone] || []);
+    callback(allMsgs[cleanPhone] || allMsgs[rawPhone] || []);
   };
   eventHub.addEventListener('messages_updated', handler);
   handler();
@@ -293,14 +379,16 @@ export function subscribeToMessages(tenantId, phone, callback) {
 // Send Outbound Message (Direct or Template, Multi-Tenant)
 // ----------------------------------------------------
 export async function sendOutboundMessage({ tenantId = DEFAULT_TENANT_ID, phone, body, type = 'text', templateName = null }) {
+  const activeTenantId = (!tenantId || tenantId === 'system_admin') ? DEFAULT_TENANT_ID : tenantId;
+  const cleanPhone = String(phone).replace(/^\+/, '').trim();
   const timestamp = Date.now();
   const messageId = `msg_out_${timestamp}_${Math.random().toString(36).substr(2, 4)}`;
 
   const newMsg = {
     id: messageId,
-    tenantId,
+    tenantId: activeTenantId,
     from: 'business',
-    to: phone,
+    to: cleanPhone,
     type,
     body,
     templateName,
@@ -309,14 +397,14 @@ export async function sendOutboundMessage({ tenantId = DEFAULT_TENANT_ID, phone,
     direction: 'outbound'
   };
 
-  // Dispatch outbound message to Render Backend API with tenantId
+  // Dispatch outbound message to Render Backend API with activeTenantId
   try {
     fetch(`${BACKEND_URL}/api/send-message`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        tenantId,
-        phone,
+        tenantId: activeTenantId,
+        phone: cleanPhone,
         body,
         type,
         templateName
@@ -332,27 +420,28 @@ export async function sendOutboundMessage({ tenantId = DEFAULT_TENANT_ID, phone,
 
   if (isLiveFirebase) {
     try {
-      // 1. Save to tenants/{tenantId}/contacts/{phone}/messages subcollection
-      const tenantMsgRef = doc(db, 'tenants', tenantId, 'contacts', phone, 'messages', messageId);
+      // 1. Save to tenants/{tenantId}/contacts/{cleanPhone}/messages subcollection
+      const tenantMsgRef = doc(db, 'tenants', activeTenantId, 'contacts', cleanPhone, 'messages', messageId);
       await setDoc(tenantMsgRef, {
         ...newMsg,
         timestamp: serverTimestamp()
       });
 
       // Update tenant contact summary
-      const tenantContactRef = doc(db, 'tenants', tenantId, 'contacts', phone);
+      const tenantContactRef = doc(db, 'tenants', activeTenantId, 'contacts', cleanPhone);
       await setDoc(tenantContactRef, {
-        phone,
+        phone: cleanPhone,
         lastMessage: type === 'template' ? `[Template] ${templateName}` : body,
         lastMessageTimestamp: serverTimestamp(),
         unreadCount: 0
       }, { merge: true });
 
       // Fallback: Also save to legacy root collection for backwards compatibility
-      const legacyMsgRef = doc(db, 'chats', phone, 'messages', messageId);
+      const legacyMsgRef = doc(db, 'chats', cleanPhone, 'messages', messageId);
       await setDoc(legacyMsgRef, { ...newMsg, timestamp: serverTimestamp() }).catch(() => {});
-      const legacyContactRef = doc(db, 'contacts', phone);
+      const legacyContactRef = doc(db, 'contacts', cleanPhone);
       await updateDoc(legacyContactRef, {
+        phone: cleanPhone,
         lastMessage: type === 'template' ? `[Template] ${templateName}` : body,
         lastMessageTimestamp: serverTimestamp(),
         unreadCount: 0
@@ -364,16 +453,16 @@ export async function sendOutboundMessage({ tenantId = DEFAULT_TENANT_ID, phone,
 
   // Local store update for instant reactivity
   const allMsgs = getStoredMessages();
-  const phoneMsgs = [...(allMsgs[phone] || []), newMsg];
-  allMsgs[phone] = phoneMsgs;
+  allMsgs[cleanPhone] = [...(allMsgs[cleanPhone] || []), newMsg];
   saveStoredMessages(allMsgs);
 
   // Update contact summary
   const contacts = getStoredContacts();
-  const idx = contacts.findIndex(c => c.phone === phone);
+  const idx = contacts.findIndex(c => c.phone === cleanPhone || c.phone === phone);
   if (idx !== -1) {
     contacts[idx] = {
       ...contacts[idx],
+      phone: cleanPhone,
       lastMessage: type === 'template' ? `[Template] ${templateName}` : body,
       lastMessageTimestamp: timestamp,
       unreadCount: 0
@@ -397,13 +486,15 @@ export async function sendOutboundMessage({ tenantId = DEFAULT_TENANT_ID, phone,
 // Simulate Inbound Message (from Customer, Multi-Tenant)
 // ----------------------------------------------------
 export async function simulateInboundMessage({ tenantId = DEFAULT_TENANT_ID, phone, name, body, type = 'text', buttonPayload = null }) {
+  const activeTenantId = (!tenantId || tenantId === 'system_admin') ? DEFAULT_TENANT_ID : tenantId;
+  const cleanPhone = String(phone).replace(/^\+/, '').trim();
   const timestamp = Date.now();
   const messageId = `msg_in_${timestamp}_${Math.random().toString(36).substr(2, 4)}`;
 
   const newMsg = {
     id: messageId,
-    tenantId,
-    from: phone,
+    tenantId: activeTenantId,
+    from: cleanPhone,
     to: 'business',
     type,
     body,
@@ -414,12 +505,12 @@ export async function simulateInboundMessage({ tenantId = DEFAULT_TENANT_ID, pho
   };
 
   const contacts = getStoredContacts();
-  let contact = contacts.find(c => c.phone === phone);
+  let contact = contacts.find(c => c.phone === cleanPhone || c.phone === phone);
 
   if (!contact) {
     contact = {
-      phone,
-      name: name || `Customer ${phone.slice(-4)}`,
+      phone: cleanPhone,
+      name: name || `Customer ${cleanPhone.slice(-4)}`,
       lastMessage: body,
       lastMessageTimestamp: timestamp,
       unreadCount: 1,
@@ -441,18 +532,18 @@ export async function simulateInboundMessage({ tenantId = DEFAULT_TENANT_ID, pho
   saveStoredContacts(contacts);
 
   const allMsgs = getStoredMessages();
-  allMsgs[phone] = [...(allMsgs[phone] || []), newMsg];
+  allMsgs[cleanPhone] = [...(allMsgs[cleanPhone] || []), newMsg];
   saveStoredMessages(allMsgs);
 
   if (isLiveFirebase) {
     try {
-      const msgRef = doc(db, 'tenants', tenantId, 'contacts', phone, 'messages', messageId);
+      const msgRef = doc(db, 'tenants', activeTenantId, 'contacts', cleanPhone, 'messages', messageId);
       await setDoc(msgRef, { ...newMsg, timestamp: serverTimestamp() });
 
-      const contactRef = doc(db, 'tenants', tenantId, 'contacts', phone);
+      const contactRef = doc(db, 'tenants', activeTenantId, 'contacts', cleanPhone);
       await setDoc(contactRef, {
         name: contact.name,
-        phone: contact.phone,
+        phone: cleanPhone,
         lastMessage: body,
         lastMessageTimestamp: serverTimestamp(),
         unreadCount: contact.unreadCount,
@@ -478,11 +569,12 @@ export function updateMessageStatus(tenantId = DEFAULT_TENANT_ID, phone, message
     phone = tenantId;
     tenantId = DEFAULT_TENANT_ID;
   }
-  tenantId = tenantId || DEFAULT_TENANT_ID;
+  const activeTenantId = (!tenantId || tenantId === 'system_admin') ? DEFAULT_TENANT_ID : tenantId;
+  const cleanPhone = String(phone).replace(/^\+/, '').trim();
 
   const allMsgs = getStoredMessages();
-  if (allMsgs[phone]) {
-    allMsgs[phone] = allMsgs[phone].map(m => {
+  if (allMsgs[cleanPhone]) {
+    allMsgs[cleanPhone] = allMsgs[cleanPhone].map(m => {
       if (m.id === messageId) return { ...m, status: newStatus };
       return m;
     });
@@ -491,10 +583,10 @@ export function updateMessageStatus(tenantId = DEFAULT_TENANT_ID, phone, message
 
   if (isLiveFirebase) {
     try {
-      const msgRef = doc(db, 'tenants', tenantId, 'contacts', phone, 'messages', messageId);
+      const msgRef = doc(db, 'tenants', activeTenantId, 'contacts', cleanPhone, 'messages', messageId);
       updateDoc(msgRef, { status: newStatus }).catch(() => {
         // Fallback root collection
-        const legacyRef = doc(db, 'chats', phone, 'messages', messageId);
+        const legacyRef = doc(db, 'chats', cleanPhone, 'messages', messageId);
         updateDoc(legacyRef, { status: newStatus }).catch(() => {});
       });
     } catch (e) {}
@@ -510,10 +602,11 @@ export function updateContact(tenantId = DEFAULT_TENANT_ID, phone, updateData) {
     phone = tenantId;
     tenantId = DEFAULT_TENANT_ID;
   }
-  tenantId = tenantId || DEFAULT_TENANT_ID;
+  const activeTenantId = (!tenantId || tenantId === 'system_admin') ? DEFAULT_TENANT_ID : tenantId;
+  const cleanPhone = String(phone).replace(/^\+/, '').trim();
 
   const contacts = getStoredContacts();
-  const idx = contacts.findIndex(c => c.phone === phone);
+  const idx = contacts.findIndex(c => c.phone === cleanPhone || c.phone === phone);
   if (idx !== -1) {
     contacts[idx] = { ...contacts[idx], ...updateData };
     saveStoredContacts(contacts);
@@ -521,9 +614,9 @@ export function updateContact(tenantId = DEFAULT_TENANT_ID, phone, updateData) {
 
   if (isLiveFirebase) {
     try {
-      const contactRef = doc(db, 'tenants', tenantId, 'contacts', phone);
+      const contactRef = doc(db, 'tenants', activeTenantId, 'contacts', cleanPhone);
       setDoc(contactRef, updateData, { merge: true }).catch(() => {
-        const legacyRef = doc(db, 'contacts', phone);
+        const legacyRef = doc(db, 'contacts', cleanPhone);
         updateDoc(legacyRef, updateData).catch(() => {});
       });
     } catch (e) {}
@@ -546,14 +639,15 @@ export function toggle24hWindow(tenantId = DEFAULT_TENANT_ID, phone, setActive) 
     phone = tenantId;
     tenantId = DEFAULT_TENANT_ID;
   }
-  tenantId = tenantId || DEFAULT_TENANT_ID;
+  const activeTenantId = (!tenantId || tenantId === 'system_admin') ? DEFAULT_TENANT_ID : tenantId;
+  const cleanPhone = String(phone).replace(/^\+/, '').trim();
 
   const now = Date.now();
   const updateData = {
     is24hActive: setActive,
     windowExpiry: setActive ? now + (24 * 60 * 60 * 1000) : now - 1000
   };
-  updateContact(tenantId, phone, updateData);
+  updateContact(activeTenantId, cleanPhone, updateData);
 }
 
 // ----------------------------------------------------

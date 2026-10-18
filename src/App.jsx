@@ -72,7 +72,10 @@ function MainApp() {
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [showSimulatorModal, setShowSimulatorModal] = useState(false);
 
-  const tenantId = currentUser?.tenantId || 'usca_academy';
+  // For live inbox messaging, system_admin defaults to primary active tenant usca_academy
+  const tenantId = (currentUser?.tenantId && currentUser.tenantId !== 'system_admin') 
+    ? currentUser.tenantId 
+    : 'usca_academy';
 
   // Handle browser URL navigation sync
   useEffect(() => {

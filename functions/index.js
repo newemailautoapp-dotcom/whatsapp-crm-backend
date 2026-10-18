@@ -345,23 +345,27 @@ async function dispatchOutboundWhatsAppMessage({ tenantId = 'usca_academy', phon
     tenantId: activeTenantId
   };
 
-  // 1. Store outbound message in Tenant Subcollection: tenants/{tenantId}/contacts/{phone}/messages/{metaMsgId}
-  const tenantMsgRef = db.collection('tenants').doc(activeTenantId).collection('contacts').doc(phone).collection('messages').doc(metaMsgId);
+  const cleanPhone = (phone || '').replace(/^\+/, '').trim();
+
+  // 1. Store outbound message in Tenant Subcollection: tenants/{tenantId}/contacts/{cleanPhone}/messages/{metaMsgId}
+  const tenantMsgRef = db.collection('tenants').doc(activeTenantId).collection('contacts').doc(cleanPhone).collection('messages').doc(metaMsgId);
   await tenantMsgRef.set(msgObj, { merge: true }).catch(() => {});
 
   // Update contact document in tenant collection
-  const tenantContactRef = db.collection('tenants').doc(activeTenantId).collection('contacts').doc(phone);
+  const tenantContactRef = db.collection('tenants').doc(activeTenantId).collection('contacts').doc(cleanPhone);
   await tenantContactRef.set({
+    phone: cleanPhone,
     lastMessage: type === 'template' ? `[Template] ${templateName}` : body,
     lastMessageTimestamp: admin.firestore.Timestamp.fromMillis(nowMs),
     tenantId: activeTenantId
   }, { merge: true }).catch(() => {});
 
   // 2. Legacy root collection fallback
-  const messageRef = db.collection('chats').doc(phone).collection('messages').doc(metaMsgId);
+  const messageRef = db.collection('chats').doc(cleanPhone).collection('messages').doc(metaMsgId);
   await messageRef.set(msgObj, { merge: true }).catch(() => {});
-  const contactRef = db.collection('contacts').doc(phone);
+  const contactRef = db.collection('contacts').doc(cleanPhone);
   await contactRef.set({
+    phone: cleanPhone,
     lastMessage: type === 'template' ? `[Template] ${templateName}` : body,
     lastMessageTimestamp: admin.firestore.Timestamp.fromMillis(nowMs)
   }, { merge: true }).catch(() => {});
