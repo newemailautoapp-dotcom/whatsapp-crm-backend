@@ -133,16 +133,32 @@ function normalizeTenantId(rawTenantId) {
   return cleaned;
 }
 
+// ----------------------------------------------------------------------
+// High-Performance In-Memory Cache for Tenant Configurations & Status Events
+// ----------------------------------------------------------------------
+const TENANT_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes cache TTL
+const tenantConfigCache = new Map(); // tenantId -> { config, cachedAt }
+const metaIdToTenantCache = new Map(); // phoneId/wabaId -> { config, cachedAt }
+const recentStatusUpdateCache = new Map(); // "messageId:status" -> timestamp (dedup window 2 minutes)
+
 // Multi-Tenant Helper: Lookup Tenant Config by Tenant ID (Default: usca_academy)
 async function getTenantConfig(rawTenantId = 'usca_academy') {
   const tenantId = normalizeTenantId(rawTenantId);
+  const now = Date.now();
+
+  // 1. Check in-memory cache first (Zero Firestore Reads!)
+  const cached = tenantConfigCache.get(tenantId);
+  if (cached && (now - cached.cachedAt) < TENANT_CACHE_TTL_MS) {
+    return cached.config;
+  }
+
   try {
     const tenantSnap = await db.doc(`tenants/${tenantId}`).get();
     if (tenantSnap.exists) {
       const data = tenantSnap.data();
       const rawPhoneId = data.phoneNumberId || process.env.WHATSAPP_PHONE_NUMBER_ID || process.env.PHONE_NUMBER_ID;
       const validPhoneId = (!rawPhoneId || rawPhoneId === '109823471092834') ? '1308538339013180' : rawPhoneId;
-      return {
+      const config = {
         tenantId: normalizeTenantId(data.tenantId || tenantSnap.id),
         name: data.name || 'USCA Academy',
         phoneNumberId: validPhoneId,
@@ -150,16 +166,28 @@ async function getTenantConfig(rawTenantId = 'usca_academy') {
         permanentToken: data.permanentToken || data.accessToken || process.env.WHATSAPP_ACCESS_TOKEN || process.env.WHATSAPP_TOKEN,
         verifyToken: data.verifyToken || process.env.VERIFY_TOKEN || 'whatsapp_crm_verify_token_2026'
       };
+
+      // Store in memory cache
+      tenantConfigCache.set(tenantId, { config, cachedAt: now });
+      if (config.phoneNumberId) metaIdToTenantCache.set(String(config.phoneNumberId), { config, cachedAt: now });
+      if (config.wabaId) metaIdToTenantCache.set(String(config.wabaId), { config, cachedAt: now });
+
+      return config;
     }
   } catch (err) {
     console.warn(`Could not read tenant config for ${tenantId}:`, err.message);
+    // If Firestore throws RESOURCE_EXHAUSTED or is unreachable, serve stale in-memory config if available
+    if (cached) {
+      console.log(`[CACHE FALLBACK] Serving stale in-memory config for ${tenantId} during quota exhaustion`);
+      return cached.config;
+    }
   }
 
   // Default Tenant Fallback (usca_academy) reading env vars
   const rawEnvPhoneId = process.env.WHATSAPP_PHONE_NUMBER_ID || process.env.PHONE_NUMBER_ID || process.env.META_PHONE_NUMBER_ID;
   const validEnvPhoneId = (!rawEnvPhoneId || rawEnvPhoneId === '109823471092834') ? '1308538339013180' : rawEnvPhoneId;
 
-  return {
+  const fallbackConfig = {
     tenantId: 'usca_academy',
     name: 'USCA Academy',
     phoneNumberId: validEnvPhoneId,
@@ -167,10 +195,31 @@ async function getTenantConfig(rawTenantId = 'usca_academy') {
     permanentToken: process.env.WHATSAPP_ACCESS_TOKEN || process.env.WHATSAPP_TOKEN || process.env.META_ACCESS_TOKEN,
     verifyToken: process.env.WEBHOOK_VERIFY_TOKEN || process.env.VERIFY_TOKEN || 'whatsapp_crm_verify_token_2026'
   };
+
+  // Cache fallback config so subsequent calls do not hammer Firestore during quota exhaustion
+  tenantConfigCache.set(tenantId, { config: fallbackConfig, cachedAt: now });
+  return fallbackConfig;
 }
 
 // Multi-Tenant Helper: Find Tenant by Meta Phone Number ID or WABA ID
 async function findTenantByMetaIds(incomingPhoneId, incomingWabaId) {
+  const now = Date.now();
+
+  // 1. Check in-memory cache first (Zero Firestore Reads!)
+  if (incomingPhoneId) {
+    const cachedPhone = metaIdToTenantCache.get(String(incomingPhoneId));
+    if (cachedPhone && (now - cachedPhone.cachedAt) < TENANT_CACHE_TTL_MS) {
+      return cachedPhone.config;
+    }
+  }
+  if (incomingWabaId) {
+    const cachedWaba = metaIdToTenantCache.get(String(incomingWabaId));
+    if (cachedWaba && (now - cachedWaba.cachedAt) < TENANT_CACHE_TTL_MS) {
+      return cachedWaba.config;
+    }
+  }
+
+  // 2. Query Firestore only on cache miss
   if (incomingPhoneId) {
     try {
       const querySnap = await db.collection('tenants').where('phoneNumberId', '==', String(incomingPhoneId)).limit(1).get();
@@ -179,7 +228,7 @@ async function findTenantByMetaIds(incomingPhoneId, incomingWabaId) {
         const data = docSnap.data();
         const rawPhoneId = data.phoneNumberId;
         const validPhoneId = (!rawPhoneId || rawPhoneId === '109823471092834') ? '1308538339013180' : rawPhoneId;
-        return {
+        const config = {
           tenantId: normalizeTenantId(data.tenantId || docSnap.id),
           name: data.name || 'Tenant ' + docSnap.id,
           phoneNumberId: validPhoneId,
@@ -187,6 +236,10 @@ async function findTenantByMetaIds(incomingPhoneId, incomingWabaId) {
           permanentToken: data.permanentToken || data.accessToken,
           verifyToken: data.verifyToken
         };
+
+        metaIdToTenantCache.set(String(incomingPhoneId), { config, cachedAt: now });
+        tenantConfigCache.set(config.tenantId, { config, cachedAt: now });
+        return config;
       }
     } catch (e) {
       console.warn(`Tenant lookup error for PhoneID ${incomingPhoneId}:`, e.message);
@@ -201,7 +254,7 @@ async function findTenantByMetaIds(incomingPhoneId, incomingWabaId) {
         const data = docSnap.data();
         const rawPhoneId = data.phoneNumberId;
         const validPhoneId = (!rawPhoneId || rawPhoneId === '109823471092834') ? '1308538339013180' : rawPhoneId;
-        return {
+        const config = {
           tenantId: normalizeTenantId(data.tenantId || docSnap.id),
           name: data.name || 'Tenant ' + docSnap.id,
           phoneNumberId: validPhoneId,
@@ -209,6 +262,10 @@ async function findTenantByMetaIds(incomingPhoneId, incomingWabaId) {
           permanentToken: data.permanentToken || data.accessToken,
           verifyToken: data.verifyToken
         };
+
+        metaIdToTenantCache.set(String(incomingWabaId), { config, cachedAt: now });
+        tenantConfigCache.set(config.tenantId, { config, cachedAt: now });
+        return config;
       }
     } catch (e) {
       console.warn(`Tenant lookup error for WABA ID ${incomingWabaId}:`, e.message);
@@ -216,7 +273,9 @@ async function findTenantByMetaIds(incomingPhoneId, incomingWabaId) {
   }
 
   // Fallback to default tenant (usca_academy)
-  return getTenantConfig('usca_academy');
+  const defaultConf = await getTenantConfig('usca_academy');
+  if (incomingPhoneId) metaIdToTenantCache.set(String(incomingPhoneId), { config: defaultConf, cachedAt: now });
+  return defaultConf;
 }
 
 // Helper function to dispatch outbound WhatsApp messages via Meta Graph API & store in Firestore
@@ -781,57 +840,39 @@ app.post('/webhook', async (req, res) => {
               const nowTimestamp = admin.firestore.Timestamp.now();
 
               if (recipientPhone && statusMessageId) {
+                // Deduplicate identical status updates to prevent useless Firestore writes
+                const statusKey = `${statusMessageId}:${newStatus}`;
+                const nowMs = Date.now();
+                if (recentStatusUpdateCache.has(statusKey) && (nowMs - recentStatusUpdateCache.get(statusKey)) < 120000) {
+                  console.log(`[STATUS DEDUP] Skipping duplicate status ${newStatus} for message ${statusMessageId}`);
+                  continue;
+                }
+                recentStatusUpdateCache.set(statusKey, nowMs);
+                if (recentStatusUpdateCache.size > 5000) {
+                  const oldest = recentStatusUpdateCache.keys().next().value;
+                  recentStatusUpdateCache.delete(oldest);
+                }
+
                 try {
-                  const tenantContactRef = db.collection('tenants').doc(activeTenantId).collection('contacts').doc(recipientPhone);
-                  const contactSnap = await tenantContactRef.get();
-
-                  if (!contactSnap.exists) {
-                    await tenantContactRef.set({
-                      name: `Lead +${recipientPhone}`,
-                      phone: recipientPhone,
-                      leadClass: 'Inbound',
-                      leadRating: 'New Lead',
-                      createdAt: nowTimestamp,
-                      lastMessage: 'Template Sent',
-                      lastMessageTimestamp: statusTime,
-                      unreadCount: 0,
-                      is24hActive: false,
-                      windowExpiry: 0,
-                      tags: ['Broadcast Lead', 'External Outreach'],
-                      optedOut: false,
-                      notes: 'Auto-registered via outbound template status webhook.',
-                      tenantId: activeTenantId
-                    }, { merge: true });
-                  } else {
-                    await tenantContactRef.set({
-                      lastMessage: contactSnap.data()?.lastMessage || 'Template Sent',
-                      lastMessageTimestamp: statusTime
-                    }, { merge: true });
-                  }
-
+                  // Direct atomic merge write to message document (Zero Firestore Reads!)
                   const tenantMsgRef = db.collection('tenants').doc(activeTenantId).collection('contacts').doc(recipientPhone).collection('messages').doc(statusMessageId);
-                  const msgSnap = await tenantMsgRef.get();
+                  await tenantMsgRef.set({
+                    id: statusMessageId,
+                    from: 'business',
+                    to: recipientPhone,
+                    status: newStatus,
+                    statusTimestamp: nowTimestamp,
+                    direction: 'outbound',
+                    tenantId: activeTenantId
+                  }, { merge: true }).catch(() => {});
 
-                  if (msgSnap.exists) {
-                    await tenantMsgRef.update({
-                      status: newStatus,
-                      statusTimestamp: nowTimestamp
-                    });
-                  } else {
-                    await tenantMsgRef.set({
-                      id: statusMessageId,
-                      from: 'business',
-                      to: recipientPhone,
-                      sender: 'agent',
-                      type: 'template',
-                      body: '[Template Message Sent]',
-                      status: newStatus,
-                      timestamp: statusTime,
-                      direction: 'outbound',
-                      statusTimestamp: nowTimestamp,
-                      tenantId: activeTenantId
-                    });
-                  }
+                  // Direct atomic merge write to contact document (Zero Firestore Reads!)
+                  const tenantContactRef = db.collection('tenants').doc(activeTenantId).collection('contacts').doc(recipientPhone);
+                  await tenantContactRef.set({
+                    phone: recipientPhone,
+                    lastMessageTimestamp: statusTime,
+                    tenantId: activeTenantId
+                  }, { merge: true }).catch(() => {});
 
                   // Legacy fallback status update
                   const legacyMsgRef = db.collection('chats').doc(recipientPhone).collection('messages').doc(statusMessageId);
