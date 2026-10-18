@@ -20,14 +20,17 @@ app.use(express.json());
 
 // Helper function to dispatch instant lead alert emails via SendGrid / Resend / Nodemailer
 async function sendLeadEmailNotification({ leadName, leadPhone }) {
-  const recipient = process.env.LEAD_ALERT_EMAIL || 'Mitchellhayles@gmail.com';
+  const recipient = process.env.LEAD_ALERT_EMAIL || 'ludazhuan@gmail.com';
   const cleanPhone = (leadPhone || '').replace(/^\+/, '');
-  const subject = `🚨 New Pre-Registration Lead Captured: ${leadName || 'Valued Lead'}`;
+  const isPartnership = leadName && leadName.includes('Partnership');
+  const subject = isPartnership 
+    ? `🤝 New USCA Academy Partnership Lead: ${leadName}` 
+    : `🚨 New Lead Captured: ${leadName || 'Valued Lead'}`;
   const bodyText = `Name: ${leadName || 'Valued Lead'}
 Phone: +${cleanPhone}
 Direct WhatsApp link: https://wa.me/${cleanPhone}`;
 
-  console.log(`[EMAIL ALERT] Preparing pre-registration lead notification for ${leadName} (+${cleanPhone}) to ${recipient}`);
+  console.log(`[EMAIL ALERT] Preparing lead notification for ${leadName} (+${cleanPhone}) to ${recipient}`);
 
   // 1. Resend API support if RESEND_API_KEY is configured
   if (process.env.RESEND_API_KEY) {
