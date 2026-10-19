@@ -15,6 +15,19 @@ import {
 } from 'lucide-react';
 import { updateContact, toggle24hWindow, simulateInboundMessage } from '../firebase/storeService';
 
+function safeEncode(str) {
+  try {
+    return encodeURIComponent(str || '');
+  } catch (e) {
+    // Fallback: strip emojis/special characters if encoding fails
+    try {
+      return encodeURIComponent(String(str || '').replace(/[^\x00-\x7F]/g, '')) || 'WA';
+    } catch (err) {
+      return 'WA';
+    }
+  }
+}
+
 export default function ContactDetails({ contact, tenantId = 'usca_academy', onClose }) {
   const [newTag, setNewTag] = useState('');
   const [notes, setNotes] = useState(contact?.notes || '');
@@ -70,7 +83,7 @@ export default function ContactDetails({ contact, tenantId = 'usca_academy', onC
         ? (rawName.split(' ').filter(Boolean)[0][0] + rawName.split(' ').filter(Boolean)[1][0]).toUpperCase()
         : rawName.slice(0, 2).toUpperCase())
     : (cleanPhone ? cleanPhone.slice(-2) : 'WA');
-  const avatarSrc = contact.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(avatarInitials)}&background=00a884&color=fff`;
+  const avatarSrc = contact.avatar || `https://ui-avatars.com/api/?name=${safeEncode(avatarInitials)}&background=00a884&color=fff`;
 
   return (
     <div className="w-80 md:w-88 bg-[#111b21] border-l border-[#222d34] h-full flex flex-col overflow-y-auto flex-shrink-0 animate-fade-in">

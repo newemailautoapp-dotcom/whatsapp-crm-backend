@@ -15,6 +15,19 @@ import {
 } from 'lucide-react';
 import { format, isToday, isYesterday } from 'date-fns';
 
+function safeEncode(str) {
+  try {
+    return encodeURIComponent(str || '');
+  } catch (e) {
+    // Fallback: strip emojis/special characters if encoding fails
+    try {
+      return encodeURIComponent(String(str || '').replace(/[^\x00-\x7F]/g, '')) || 'WA';
+    } catch (err) {
+      return 'WA';
+    }
+  }
+}
+
 export default function Sidebar({ 
   contacts = [], 
   selectedContact, 
@@ -134,7 +147,7 @@ export default function Sidebar({
         <div className="flex items-center gap-3">
           <div className="relative">
             <img 
-              src={currentUser?.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(currentUser?.name || 'Agent')}&background=00a884&color=fff`} 
+              src={currentUser?.avatar || `https://ui-avatars.com/api/?name=${safeEncode(currentUser?.name || 'Agent')}&background=00a884&color=fff`} 
               alt="Agent Avatar" 
               className="w-10 h-10 rounded-full object-cover border border-[#00a884]"
             />
@@ -246,7 +259,7 @@ export default function Sidebar({
             const hasUnread = (contact.unreadCount || 0) > 0;
             const displayName = getContactDisplayName(contact);
             const avatarInitials = getContactAvatarInitials(contact);
-            const avatarSrc = contact.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(avatarInitials)}&background=00a884&color=fff`;
+            const avatarSrc = contact.avatar || `https://ui-avatars.com/api/?name=${safeEncode(avatarInitials)}&background=00a884&color=fff`;
             const displayLastMsg = getContactLastMessage(contact);
 
             return (

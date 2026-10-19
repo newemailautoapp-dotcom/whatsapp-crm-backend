@@ -19,6 +19,19 @@ import { format } from 'date-fns';
 import { META_TEMPLATES } from '../data/templates';
 import { sendOutboundMessage, toggle24hWindow } from '../firebase/storeService';
 
+function safeEncode(str) {
+  try {
+    return encodeURIComponent(str || '');
+  } catch (e) {
+    // Fallback: strip emojis/special characters if encoding fails
+    try {
+      return encodeURIComponent(String(str || '').replace(/[^\x00-\x7F]/g, '')) || 'WA';
+    } catch (err) {
+      return 'WA';
+    }
+  }
+}
+
 export default function ChatWindow({ 
   contact, 
   messages = [], 
@@ -138,7 +151,7 @@ export default function ChatWindow({
         ? (rawName.split(' ').filter(Boolean)[0][0] + rawName.split(' ').filter(Boolean)[1][0]).toUpperCase()
         : rawName.slice(0, 2).toUpperCase())
     : (cleanPhone ? cleanPhone.slice(-2) : 'WA');
-  const avatarSrc = contact.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(avatarInitials)}&background=00a884&color=fff`;
+  const avatarSrc = contact.avatar || `https://ui-avatars.com/api/?name=${safeEncode(avatarInitials)}&background=00a884&color=fff`;
 
   return (
     <div className="flex-1 flex flex-col bg-[#0b141a] chat-pattern h-full min-w-0 border-r border-[#222d34] relative">
